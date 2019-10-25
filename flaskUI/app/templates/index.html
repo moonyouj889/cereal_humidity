@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Food Drying Sensor Dashboard</title>
+    <meta name="description" content="website description" />
+    <meta name="keywords" content="website keywords, website keywords" />
+    <meta http-equiv="content-type" content="text/html; charset=windows-1252" />
+    <link
+      rel="stylesheet"
+      href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css"
+      integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T"
+      crossorigin="anonymous"
+    />
+    <!-- modernizr enables HTML5 elements and feature detects
+    <script type="text/javascript" src="static/modernizr-1.5.min.js"></script> -->
+  </head>
+
+  <body>
+    <div id="main">
+      <header>
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+          <a class="navbar-brand" href="/">Cereal</a>
+          <button
+            class="navbar-toggler"
+            type="button"
+            data-toggle="collapse"
+            data-target="#navbarNavAltMarkup"
+            aria-controls="navbarNavAltMarkup"
+            aria-expanded="false"
+            aria-label="Toggle navigation"
+          >
+            <span class="navbar-toggler-icon"></span>
+          </button>
+          <div class="collapse navbar-collapse" id="navbarNavAltMarkup">
+            <div class="navbar-nav">
+              <a class="nav-item nav-link active" href="/current">
+                Current Data
+              </a>
+              <a class="nav-item nav-link" href="/batch">Batch Analysis</a>
+            </div>
+          </div>
+        </nav>
+      </header>
+      <div class="jumbotron jumbotron jumbotron-fluid">
+        <div class="container">
+          <h1 class="display-4">Product Humidity Monitoring Dashboard</h1>
+          <p class="lead">
+            This is a simple dashboard to display the current conditions and running averages of the
+            sensor data located in the Cereal Factory's oven. The occasional batch analysis of the
+            data in relations to the humidity measurements of the product can be found under "Batch
+            Analysis". The current conditions and averages are streamed data from Kafka, and they
+            are also saved in HBase for future reference.
+          </p>
+        </div>
+      </div>
+
+      <div class="container">
+        <h2>Current Oven Conditions</h2>
+        <table class="table table-dark">
+          <thead>
+            <tr>
+              <th scope="col">Process</th>
+              <th scope="col">Product Input T</th>
+              <th scope="col">Water Flow</th>
+              <th scope="col">Fan Intensity</th>
+              <th scope="col">Process Water T</th>
+              <th scope="col">Process 1 T</th>
+              <th scope="col">Process 2 T</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td id="processIsOn"/>
+              <td id="inputTemperatureProduct" />
+              <td id="waterFlowProcess" />
+              <td id="intensityFanProcess" />
+              <td id="waterTemperatureProcess" />
+              <td id="temperatureProcess1" />
+              <td id="temperatureProcess2" />
+            </tr>
+          </tbody>
+        </table>
+        <p style="text-align: right">
+          Last update: <i id="currTimestamp"></i>
+        </p>
+        <h2>Curent Condition Averages</h2>
+        <table class="table table-dark">
+          <thead>
+            <tr>
+              <th scope="col">Product Input T</th>
+              <th scope="col">Water Flow</th>
+              <th scope="col">Fan Intensity</th>
+              <th scope="col">Process Water T</th>
+              <th scope="col">Process 1 T</th>
+              <th scope="col">Process 2 T</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td id="avginputTemperatureProduct" />
+              <td id="avgWaterFlowProcess" />
+              <td id="avgIntensityFanProcess" />
+              <td id="avgWaterTemperatureProcess" />
+              <td id="avgTemperatureProcess1" />
+              <td id="avgTemperatureProcess2" />
+            </tr>
+          </tbody>
+        </table>
+        <p style="text-align: right">
+          Last update: <i id="avgTimestamp"></i>
+        </p>
+      </div>
+    </div>
+    <script
+      src="https://code.jquery.com/jquery-3.3.1.slim.min.js"
+      integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.7/umd/popper.min.js"
+      integrity="sha384-UO2eT0CpHqdSJQ6hJty5KVphtPhzWj9WO1clHTMGa3JDZwrnQq4sF86dIHNDz0W1"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"
+      integrity="sha384-JjSmVgyd0p3pXB1rRibZUAYoIIy6OrQ6VrjIEaFf/nJGzIxFDsf4x0xIM+B07jRM"
+      crossorigin="anonymous"
+    ></script>
+    <!-- <script src="static/current.js" /> -->
+    <script type="text/javascript" src="static/current.js"></script>
+  </body>
+</html>
