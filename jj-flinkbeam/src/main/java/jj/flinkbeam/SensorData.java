@@ -19,7 +19,7 @@ package jj.flinkbeam;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Arrays;
-import java.util.ImmutableList;
+// import java.util.ImmutableList;
 
 import org.apache.beam.sdk.options.Validation.Required;
 import org.apache.beam.sdk.Pipeline;
@@ -43,6 +43,7 @@ import org.apache.kafka.common.serialization.LongDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.beam.sdk.io.AvroIO;
 import org.apache.beam.sdk.io.TextIO;
+// import org.apache.beam.sdk.io.hbase.HBaseIO;
 import org.apache.beam.sdk.io.fs.ResourceId;
 // import org.apache.beam.runners.flink.FlinkPipelineOptions;
 import org.apache.beam.sdk.io.hdfs.HadoopFileSystemOptions;
@@ -259,11 +260,29 @@ public class SensorData {
 
     // options = PipelineOptionsFactory .fromArgs(combinedArgs) .withValidation() .as(HadoopFileSystemOptions.class); 
     // Pipeline pipeline = Pipeline.create(options);
-    MyOptions options = PipelineOptionsFactory.fromArgs(args).withValidation().as(MyOptions.class);
+
+    String[] args1 = new String[] {"--hdfsConfiguration=[{\"fs.defaultFS\":\"hdfs://localhost:9000\"}]" };
+    int length = args1.length + args.length;
+    String[] combinedArgs = new String[length];
+    int pos = 0;
+    for (String element : args1) {
+        combinedArgs[pos] = element;
+        pos++;
+    }
+    for (String element : args) {
+        combinedArgs[pos] = element;
+        pos++;
+    }
+    MyOptions options = PipelineOptionsFactory.fromArgs(combinedArgs).withValidation().as(MyOptions.class);
     options.setStreaming(true);
-    options.setHdfsConfiguration(ArrayList([{"fs.defaultFS" : "hdfs://host:port"}]));
-    // options.setHdfsConfiguration(ImmutableList.of(fileSystem.fileSystem.getConf()));
     Pipeline p = Pipeline.create(options);
+
+    // Configuration conf = new Configuration();
+    // conf.set("fs.defaultFS", "hdfs://localhost:9000");
+
+    // MyOptions options = PipelineOptionsFactory.fromArgs(args).withValidation().as(MyOptions.class);
+    // options.setStreaming(true);
+    // Pipeline p = Pipeline.create(options);
 
     // Build the Avro schema for the Avro output.
     File file = new File("woHumid.avsc");
@@ -278,7 +297,7 @@ public class SensorData {
 
     PCollection<String> currentConditions = p //
         .apply("GetMessages", KafkaIO.<Long, String>read(). //
-            withBootstrapServers("localhost:9092"). // s
+            withBootstrapServers("localhost:9092"). //
             withTopic("sensor"). //
             withKeyDeserializer(LongDeserializer.class). //
             withValueDeserializer(StringDeserializer.class).withoutMetadata())
@@ -290,15 +309,15 @@ public class SensorData {
 
     currentConditions.apply("TimeWindow", Window.into(FixedWindows//
         .of(Duration.standardSeconds(60)))) //
-        // .apply("Convert CSV to Avro formatted data", ParDo.of(new ConvertCsvToAvro(schemaJson1)))
-        // .setCoder(AvroCoder.of(GenericRecord.class, schema)) //
-        // .apply("WriteAsAvro", AvroIO.writeGenericRecords(schema) //
-        // .to(options.getOutput()).withSuffix(".avro")//
-        // .withNumShards(1).withWindowedWrites());
-        .apply("WriteMessage", TextIO.write() //
-            .withWindowedWrites() //
-            .to("hdfs://127.0.0.1:9000/cereal/data") //
-            .withNumShards(1));
+        .apply("Convert CSV to Avro formatted data", ParDo.of(new ConvertCsvToAvro(schemaJson1)))
+        .setCoder(AvroCoder.of(GenericRecord.class, schema)) //
+        .apply("WriteAsAvro", AvroIO.writeGenericRecords(schema) //
+        .to("hdfs://127.0.0.1:9000/cereal/data").withSuffix(".avro")//
+        .withNumShards(1).withWindowedWrites());
+        // .apply("WriteMessage", TextIO.write() //
+        //     .withWindowedWrites() //
+        //     .to("hdfs://127.0.0.1:9000/cereal/data") //
+        //     .withNumShards(1));
     // .withCodec(CodecFactory.snappyCodec()) //
     p.run();
   }

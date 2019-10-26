@@ -6,7 +6,7 @@ $KAFKA_HOME/bin/kafka-topics.sh --zookeeper $ZOOKEPER_HOST:2181 --delete --topic
 $KAFKA_HOME/bin/kafka-topics.sh --zookeeper $ZOOKEPER_HOST:2181 --delete --topic lab
 
 # running for testing
-python ./send_sensor_data.py --speedFactor 120
+python ./send_sensor_data.py --speedFactor 240
 
 # running for real time
 # python ./send_sensor_data.py --speedFactor 1

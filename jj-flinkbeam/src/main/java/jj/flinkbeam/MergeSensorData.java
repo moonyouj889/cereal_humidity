@@ -109,7 +109,7 @@ public class MergeSensorData {
 
   private static final Logger LOG = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
   // window size in seconds (in reality, would use it for daily batch load)
-  static final int WINDOW_SIZE = 60; 
+  static final int WINDOW_SIZE = 360; 
 
   public interface MyOptions extends StreamingOptions {
 
