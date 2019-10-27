@@ -19,7 +19,7 @@ run by typing: python SimpleApp.py
 Since pip installed
 '''
 
-logFile = "/Users/juliejung/Documents/deProjects/cereal_humidity/sparkTest.txt"  # Should be some file on your system
+logFile = "hdfs://localhost:9000/user/julie/cereal/data/sparkTest.txt"  # Should be some file on your system
 spark = SparkSession.builder.appName("SimpleApp").getOrCreate()
 logData = spark.read.text(logFile).cache()
 
