@@ -22,6 +22,10 @@ import java.util.Arrays;
 import java.util.stream.Stream;
 import java.util.stream.Collectors;
 import java.util.Collection;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.time.ZoneId;
+import java.nio.charset.StandardCharsets;
 
 import org.apache.beam.sdk.options.Validation.Required;
 import org.apache.beam.sdk.options.PipelineOptions;
@@ -61,6 +65,12 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.beam.sdk.io.AvroIO;
 import org.apache.beam.sdk.io.TextIO;
+import org.apache.beam.sdk.io.hbase.HBaseIO;
+import org.apache.hadoop.hbase.HBaseConfiguration;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.client.Mutation;
+import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.util.Bytes;
 
 import java.io.File;
 import org.joda.time.Duration;
@@ -126,7 +136,6 @@ public class AvgSensorData {
     @Description("Path of the file to write to")
     @Required
     String getOutput();
-
     void setOutput(String value);
 
     @Description("Over how long a time period should we average? (in minutes)")
@@ -140,6 +149,12 @@ public class AvgSensorData {
     Double getSpeedupFactor();
 
     void setSpeedupFactor(Double d);
+
+    @Description("HBase table name for running averages")
+    @Default.String("runningAvgAnalysis")
+    String getTableName();
+    void setTableName(String output);
+
   }
 
   public static String getSchema(String schemaPath) throws IOException {
@@ -401,14 +416,13 @@ public class AvgSensorData {
       .apply("AvgByTimestamp", Mean.perKey())
       .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
     
-    
+    // Send out to kafka with topic=averages
     inputTempProduct.apply("PublishAvgsToKafka", KafkaIO.<String, String>write()
       .withBootstrapServers(KAFKA_SERVER)
       .withTopic("averages")
       .withKeySerializer(StringSerializer.class)
       .withValueSerializer(StringSerializer.class)
     );
-
     waterFlowProcess.apply("PublishAvgsToKafka", KafkaIO.<String, String>write()
       .withBootstrapServers(KAFKA_SERVER)
       .withTopic("averages")
@@ -429,7 +443,7 @@ public class AvgSensorData {
     );
     tempProcess1.apply("PublishAvgsToKafka", KafkaIO.<String, String>write()
       .withBootstrapServers(KAFKA_SERVER)
-      .withTopic("averages")
+      .withTopic("averages") 
       .withKeySerializer(StringSerializer.class)
       .withValueSerializer(StringSerializer.class)
     );
@@ -440,6 +454,78 @@ public class AvgSensorData {
       .withValueSerializer(StringSerializer.class)
     );
 
+    // Write to HBase
+    final Configuration conf = HBaseConfiguration.create();
+    
+    inputTempProduct.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+      .withConfiguration(conf).withTableId(options.getTableName()));
+    
+    waterFlowProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+      .withConfiguration(conf).withTableId(options.getTableName()));
+      
+    intensityFanProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+      .withConfiguration(conf).withTableId(options.getTableName()));
+      
+    waterTempProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+      .withConfiguration(conf).withTableId(options.getTableName()));
+      
+    tempProcess1.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+      .withConfiguration(conf).withTableId(options.getTableName()));
+      
+    tempProcess2.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+      .withConfiguration(conf).withTableId(options.getTableName()));
+      
+
     p.run();
   }
+  private static Mutation makeMutation(String key, String value) {
+    // rowkey design: [factory_id]#[oven_id]#[timestamp of running avg]
+    byte[] rowKey = ("001#001#" + key).getBytes(StandardCharsets.UTF_8);
+    String[] keyval = value.split(",");
+    String columnName = keyval[0];
+    Double dValue= Double.parseDouble(keyval[1]); 
+    return new Put(rowKey)
+        .addColumn(COLUMN_FAMILY, Bytes.toBytes(columnName), Bytes.toBytes(dValue));
+  }
+
+  private static final byte[] COLUMN_FAMILY = Bytes.toBytes("METER");
+
+  private static final DateTimeFormatter formatter =
+    DateTimeFormatter.ofPattern("yyyyMMddHHmm").withZone(ZoneId.systemDefault());
+
+  private static String getThisInstantFormatted() {
+    Instant instant = Instant.now();
+    return formatter.format(instant);
+  }
+
 }
