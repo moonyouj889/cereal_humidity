@@ -22,100 +22,120 @@ from dateutil.parser import parse
 
 
 '''
+Make sure that the avro files are in HDFS prior to running the application.
+
 running script:
 spark-submit --master yarn --packages org.apache.spark:spark-avro_2.11:2.4.4 CerealHumidity.py 
+
+due to issue with spark2.4 compatibility with shc, build from master locally, then use jar instead.
+Make sure to put hbase-client version 3.0.0-SNAPTSHOT in pom before building
+
+spark-submit --master yarn --packages org.apache.spark:spark-avro_2.11:2.4.4 \
+    --jars /usr/local/shc/core/target/shc-core-1.1.3-2.4-s_2.11.jar,\
+    $HBASE_HOME/lib/hbase-client*.jar,\
+    $HBASE_HOME/lib/hbase-common*.jar,\
+    $HBASE_HOME/lib/hbase-server*.jar,\
+    $HBASE_HOME/lib/guava-12.0.1.jar,\
+    $HBASE_HOME/lib/hbase-protocol*.jar,\
+    $HBASE_HOME/lib/htrace-core-3.1.0-incubating.jar,\
+    $HBASE_HOME/lib/metrics-core-2.2.0.jar \
+    --files $HBASE_HOME/conf/hbase-site.xml CerealHumidity.py 
 '''
 
+FILEDIR = "hdfs://localhost:9000/user/hadoop/cereal/data/"
+FILENAME = "kafkamsgs2019-10-26T13_30_00.000Z-2019-10-26T13_36_00.000Z-pane-0-last-00000-of-00001.avro"
 
-spark = SparkSession.builder.appName("CerealHumidity").getOrCreate()
-log4j = spark.sparkContext._jvm.org.apache.log4j
-log4j.LogManager.getRootLogger().setLevel(log4j.Level.ERROR)
+def main(spark):
+    df = spark.read.format("avro").load(args.fileDir + args.avroFile)
+    orderedAvro = df.orderBy(df.timestamp)
+    partitionMarkers = df.where(df.productHumidity.isNotNull()).select(df.timestamp).orderBy(df.timestamp).collect()
+    fileDate, startDate = "", ""
+    dailyAvgsTable = None
 
-# logData = spark.read.text(logFile).cache()
+    for date in partitionMarkers:
+        endDate = date.timestamp
+        print("START: {}\tEND: {}".format(startDate, endDate))
+        partitionedTable = orderedAvro.filter((df.timestamp > startDate) & (df.timestamp <= endDate))
+        avgsDF = partitionedTable.agg({
+                    "inputTemperatureProduct": "avg",
+                    "waterFlowProcess": "avg",
+                    "intensityFanProcess": "avg",
+                    "waterTemperatureProcess": "avg",
+                    "temperatureProcess1": "avg",
+                    "temperatureProcess2": "avg"})
+        startTimeVal = partitionedTable.agg({"timestamp": "min"}).collect()[0]["min(timestamp)"]
+        endTimeVal = partitionedTable.agg({"timestamp": "max"}).collect()[0]["max(timestamp)"]
+        productHumidityVal = partitionedTable.agg({"productHumidity": "max"}).collect()[0]["max(productHumidity)"]
 
-FILEDIR = 'hdfs://localhost:9000/user/hadoop/cereal/data/'
+        # add column for rowkey val of HBase
+        # in theory, when multiple factories and multiple ovens exist, this is a useful format
+        # [factory_id]#[oven_id]#[data_date]#[startTime]#[endTime]
+        # e.g. 001#001#20140521#2021#2115
+        if fileDate == "": fileDate = parse(endDate) # extract the date of data just once
+        fileDateYYYYMMDD =  "{}{:02}{:02}".format(fileDate.year, fileDate.month, fileDate.day)
+        startTime, endTime = parse(startTimeVal), parse(endTimeVal)
+        startTimeHHMM = "{:02}{:02}".format(startTime.hour, startTime.minute) # HHMM since data every minute
+        endTimeHHMM = "{:02}{:02}".format(endTime.hour, endTime.minute)
+        key = "001#001#{}#{}#{}".format(fileDateYYYYMMDD, startTimeHHMM, endTimeHHMM)
+        newAvgsRow = avgsDF.withColumn("startTimestamp", lit(startTimeVal)) \
+                        .withColumn("endTimestamp", lit(endTimeVal)) \
+                        .withColumn("productHumidity", lit(productHumidityVal)) \
+                        .withColumn("key", lit(key))
+                        
+        if dailyAvgsTable:
+            dailyAvgsTable = dailyAvgsTable.union(newAvgsRow)
+        else:
+            dailyAvgsTable = newAvgsRow
+        startDate = date.timestamp
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--avroFile", help="avro file name to perform batch analysis on", type=str,
-    default="kafkamsgs2019-10-26T13_06_00.000Z-2019-10-26T13_12_00.000Z-pane-0-last-00000-of-00001.avro")
-args = parser.parse_args()
-
-df = spark.read.format("avro").load(FILEDIR + args.avroFile)
-orderedAvro = df.orderBy(df.timestamp)
-partitionMarkers = df.where(df.productHumidity.isNotNull()).select(df.timestamp).orderBy(df.timestamp).collect()
-startDate = ""
-partitionedTables = []
-
-for date in partitionMarkers:
-    print("START: {}\tEND: {}".format(startDate, date.timestamp))
-    partitionedTables.append(orderedAvro.filter((df.timestamp > startDate) & (df.timestamp <= date.timestamp)))
-    startDate = date.timestamp
-
-print("number of partitioned tables: {}".format(len(partitionedTables)))
-print("-----------------------------------------------------------")
-
-for table in partitionedTables:
-    avgsDF = table.agg({"inputTemperatureProduct": "avg",
-                     "waterFlowProcess": "avg",
-                     "intensityFanProcess": "avg",
-                     "waterTemperatureProcess": "avg",
-                     "temperatureProcess1": "avg",
-                     "temperatureProcess2": "avg"}) \
-                # .withColumn("startTimestamp", table.select(min('age').over())) \
-                # .withColumn("endTimestamp", table.max("timestamp").over())
-    startTimeVal = table.agg({"timestamp": "min"}).collect()[0]["min(timestamp)"]
-    endTimeVal = table.agg({"timestamp": "max"}).collect()[0]["max(timestamp)"]
-    productHumidityVal = table.agg({"productHumidity": "max"}).collect()[0]["max(productHumidity)"]
-    finalDF = avgsDF.withColumn("startTimestamp", lit(startTimeVal)) \
-                    .withColumn("endTimestamp", lit(endTimeVal)) \
-                    .withColumn("productHumidity", lit(productHumidityVal))
-    print(finalDF.collect())
-    print("=========================================================")
-
-
-
-'''
-Row(timestamp='2014-05-21T04:58:00-04:00', 
-    productHumidity=None, 
-    processOn=False, 
-    inputTemperatureProduct=44.29999923706055, 
-    waterFlowProcess=0.0, 
-    intensityFanProcess=0.0, 
-    waterTemperatureProcess=36.54999923706055, 
-    temperatureProcess1=20.5, 
-    temperatureProcess2=22.149999618530273)
-
-startTimestamp
-endTimestamp
-productHumidity
-avgInputTemperatureProduct
-avgWaterFlowProcess
-avgIntensityFanProcess
-avgWatertemperatureProcess
-avgTemperatureProcess1
-avgTemperatureProcess2
-'''
-
-#Write to HBase
-# def catalog = '{
-#         "table":{"namespace":"default", "name":"table1"},\
-#         "rowkey":"key",\
-#         "columns":{\
-#           "col0":{"cf":"rowkey", "col":"key", "type":"string"},\
-#           "col1":{"cf":"cf1", "col":"col1", "type":"boolean"},\
-#           "col2":{"cf":"cf1", "col":"col2", "type":"double"},\
-#           "col3":{"cf":"cf1", "col":"col3", "type":"float"},\
-#           "col4":{"cf":"cf1", "col":"col4", "type":"int"},\
-#           "col5":{"cf":"cf2", "col":"col5", "type":"bigint"},\
-#           "col6":{"cf":"cf2", "col":"col6", "type":"smallint"},\
-#           "col7":{"cf":"cf2", "col":"col7", "type":"string"},\
-#           "col8":{"cf":"cf2", "col":"col8", "type":"tinyint"}\
-#         }\
-#       }'
-# df.write\
-#     .options(catalog=catalog)\
-#     .format("org.apache.spark.sql.execution.datasources.hbase")\
-#     .save()
+    print("===================================================================")
+    # print(dailyAvgsTable.schema.names)
+    for row in dailyAvgsTable.collect():
+        print(row)
 
 
-spark.stop()
+    #Write to HBase
+    catalog = '{"table":{"namespace":"default", "name":"batchHumidityAnalysis"},\
+                "rowkey":"key",\
+                "columns":{\
+                    "key":{"cf":"rowkey", "col":"key", "type":"string"},\
+                    "startTimestamp":{"cf":"METER", "col":"startTimestamp", "type":"string"},\
+                    "endTimestamp":{"cf":"METER", "col":"endTimestamp", "type":"string"},\
+                    "productHumidity":{"cf":"METER", "col":"productHumidity", "type":"double"},\
+                    "avg(waterFlowProcess)":{"cf":"METER", "col":"avgWaterFlowProcess", "type":"double"},\
+                    "avg(intensityFanProcess)":{"cf":"METER", "col":"avgIntensityFanProcess", "type":"double"},\
+                    "avg(waterTemperatureProcess)":{"cf":"METER", "col":"avgWaterTemperatureProcess", "type":"double"},\
+                    "avg(temperatureProcess1)":{"cf":"METER", "col":"avgTemperatureProcess1", "type":"double"},\
+                    "avg(temperatureProcess2)":{"cf":"METER", "col":"avgTemperatureProcess2", "type":"double"},\
+                    "avg(inputTemperatureProduct)":{"cf":"METER", "col":"avg(inputTemperatureProduct)", "type":"double"}\
+                    }\
+                }'
+    dailyAvgsTable.write\
+        .options(catalog=catalog)\
+        .format("org.apache.spark.sql.execution.datasources.hbase")\
+        .save()
+
+    for row in dailyAvgsTable.select(dailyAvgsTable.key).collect():
+        print("wrote to HBase in table \"batchHumidityAnalysis\" row: {}".format(row.key))
+
+    batchHumidityAnalysisDf = spark.read \
+        .options(catalog=catalog) \
+        .format('org.apache.spark.sql.execution.datasources.hbase') \
+        .load()
+
+    print("=========================")
+    batchHumidityAnalysisDf.show()
+
+if __name__ == '__main__':
+    spark = SparkSession.builder.appName("CerealHumidity").config("spark.hadoop.validateOutputSpecs", False).getOrCreate()
+    log4j = spark.sparkContext._jvm.org.apache.log4j
+    log4j.LogManager.getRootLogger().setLevel(log4j.Level.ERROR)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--fileDir", help="HDFS directory of the avro file", type=str, default=FILEDIR)
+    parser.add_argument("--avroFile", help="avro file name to perform batch analysis on", type=str, default=FILENAME)
+    args = parser.parse_args()
+
+    main(spark)
+
+    spark.stop()
