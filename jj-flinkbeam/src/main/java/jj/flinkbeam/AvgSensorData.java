@@ -25,6 +25,7 @@ import java.util.Collection;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.ZoneId;
+import java.time.temporal.TemporalAccessor;;
 import java.nio.charset.StandardCharsets;
 
 import org.apache.beam.sdk.options.Validation.Required;
@@ -141,19 +142,22 @@ public class AvgSensorData {
     @Description("Over how long a time period should we average? (in minutes)")
     @Default.Double(60.0)
     Double getAveragingInterval();
-
     void setAveragingInterval(Double d);
 
     @Description("Simulation speedup factor. Use 1.0 if no speedup")
     @Default.Double(60.0)
     Double getSpeedupFactor();
-
     void setSpeedupFactor(Double d);
 
     @Description("HBase table name for running averages")
     @Default.String("runningAvgAnalysis")
     String getTableName();
     void setTableName(String output);
+
+    @Description("HBase table name for current conditions")
+    @Default.String("currentConditions")
+    String getLoadTableName();
+    void setLoadTableName(String output);
 
   }
 
@@ -284,13 +288,43 @@ public class AvgSensorData {
     }
   }
 
+  private static final DateTimeFormatter originalFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
+
+  public static class MakeMutation extends SimpleFunction<String, Mutation> {
+
+    Integer index;
+
+    public MakeMutation(Integer index) {
+      this.index = index;
+    }
+
+    @Override
+    public Mutation apply(String row) {
+      String[] values = row.split(",");
+      String tstamp = values[0];
+      TemporalAccessor temporalAccessor = originalFormatter.parse(tstamp);
+      String columnName = COLUMNS.get(index);
+      String hbaseColumnName = minFormatter.format(temporalAccessor);
+      String date_id = yyyMMddFormatter.format(temporalAccessor);
+      String hour_id = hourFormatter.format(temporalAccessor);
+      Double value = Double.parseDouble(values[index+2]);
+
+      // rowkey design: [factory_id]#[oven_id]#[meter_id]#[yyyyMMdd]#[HH]
+      // under the assumption that the common queries conducted by analysts are on hourly basis
+      // meter_id is same as the fieldName from original data (e.g. temperatureProcess1)
+      byte[] rowKey = ("001#001#" + columnName + "#" + date_id + "#" + hour_id).getBytes(StandardCharsets.UTF_8);
+      return makeBatchMutation(rowKey, hbaseColumnName, value);
+    }
+  }
+
   public static void main(String[] args) throws IOException, IllegalArgumentException {
 
     MyOptions options = PipelineOptionsFactory.fromArgs(args).withValidation().as(MyOptions.class);
     options.setStreaming(true);
     Pipeline p = Pipeline.create(options);
+    final Configuration conf = HBaseConfiguration.create();
 
-/*     // Build the Avro schema for the Avro output.
+    // Build the Avro schema for the Avro output.
     // Schema schema = null;
     File file = new File("avroSchema.avsc");
     String path = file.getAbsolutePath();
@@ -365,7 +399,13 @@ public class AvgSensorData {
                .apply("WriteAsAvro", AvroIO.writeGenericRecords(schema)
                         .to(options.getOutput()).withSuffix(".avro")
                         .withNumShards(1).withWindowedWrites());
- */
+
+    // to create one row for each day per column in HBase
+    for (int i=0; i<COLUMNS.size(); i++) {
+      mergedTable.apply("ToHBaseMutation", MapElements.via(new MakeMutation(i)))//
+                 .apply("WriteCurrentConditionsToHBase", HBaseIO.write() //
+                    .withConfiguration(conf).withTableId(options.getLoadTableName()));
+    }
 
     /* 
     * Stream Pipeline: running average of all sensor values over 30 minute windows (frequency of 2)
@@ -454,13 +494,11 @@ public class AvgSensorData {
       .withValueSerializer(StringSerializer.class)
     );
 
-    // Write to HBase
-    final Configuration conf = HBaseConfiguration.create();
-    
+    // Write to HBase    
     inputTempProduct.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
       @Override
       public Mutation apply(KV<String, String> input) {
-        return makeMutation(getThisInstantFormatted(), input.getValue());
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
     })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
@@ -468,7 +506,7 @@ public class AvgSensorData {
     waterFlowProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
       @Override
       public Mutation apply(KV<String, String> input) {
-        return makeMutation(getThisInstantFormatted(), input.getValue());
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
     })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
@@ -476,7 +514,7 @@ public class AvgSensorData {
     intensityFanProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
       @Override
       public Mutation apply(KV<String, String> input) {
-        return makeMutation(getThisInstantFormatted(), input.getValue());
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
     })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
@@ -484,7 +522,7 @@ public class AvgSensorData {
     waterTempProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
       @Override
       public Mutation apply(KV<String, String> input) {
-        return makeMutation(getThisInstantFormatted(), input.getValue());
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
     })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
@@ -492,7 +530,7 @@ public class AvgSensorData {
     tempProcess1.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
       @Override
       public Mutation apply(KV<String, String> input) {
-        return makeMutation(getThisInstantFormatted(), input.getValue());
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
     })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
@@ -500,7 +538,7 @@ public class AvgSensorData {
     tempProcess2.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
       @Override
       public Mutation apply(KV<String, String> input) {
-        return makeMutation(getThisInstantFormatted(), input.getValue());
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
     })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
@@ -508,6 +546,12 @@ public class AvgSensorData {
 
     p.run();
   }
+
+  private static Mutation makeBatchMutation(byte[] rowkey, String columnName,Double value) {
+    return new Put(rowkey)
+        .addColumn(COLUMN_FAMILY, Bytes.toBytes(columnName), Bytes.toBytes(value));
+  }
+
   private static Mutation makeMutation(String key, String value) {
     // rowkey design: [factory_id]#[oven_id]#[timestamp of running avg]
     byte[] rowKey = ("001#001#" + key).getBytes(StandardCharsets.UTF_8);
@@ -520,10 +564,20 @@ public class AvgSensorData {
 
   private static final byte[] COLUMN_FAMILY = Bytes.toBytes("METER");
 
-  private static final DateTimeFormatter formatter =
+  // [yyyyMMdd]#[HH]
+  private static final DateTimeFormatter yyyMMddFormatter =
+    DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneId.systemDefault());
+
+  private static final DateTimeFormatter hourFormatter =
+    DateTimeFormatter.ofPattern("HH").withZone(ZoneId.systemDefault());
+  
+  private static final DateTimeFormatter minFormatter =
+    DateTimeFormatter.ofPattern("mm").withZone(ZoneId.systemDefault());
+  
+  private static final DateTimeFormatter streamFormatter =
     DateTimeFormatter.ofPattern("yyyyMMddHHmm").withZone(ZoneId.systemDefault());
 
-  private static String getThisInstantFormatted() {
+  private static String getThisInstantFormatted(DateTimeFormatter formatter) {
     Instant instant = Instant.now();
     return formatter.format(instant);
   }
