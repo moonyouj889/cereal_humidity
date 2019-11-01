@@ -25,7 +25,7 @@ import java.util.Collection;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.ZoneId;
-import java.time.temporal.TemporalAccessor;;
+import java.time.temporal.TemporalAccessor;
 import java.nio.charset.StandardCharsets;
 
 import org.apache.beam.sdk.options.Validation.Required;
@@ -102,7 +102,7 @@ mvn compile exec:java -Dexec.mainClass=jj.flinkbeam.AvgSensorData \
 mvn -e -X clean package exec:java -Dexec.mainClass=jj.flinkbeam.AvgSensorData \
     -Pflink-runner \
     -Dexec.args="--runner=FlinkRunner \
-      --output=/tmp/kafkamsgs \
+      --output=/tmp/currConditions \
       --flinkMaster=localhost \
       --filesToStage=target/jj-flinkbeam-bundled-1.0-SNAPSHOT.jar" \
     -Djava.util.logging.config.file=src/main/resources/logging.properties
@@ -110,7 +110,15 @@ mvn -e -X clean package exec:java -Dexec.mainClass=jj.flinkbeam.AvgSensorData \
 mvn clean package exec:java -Dexec.mainClass=jj.flinkbeam.AvgSensorData \
     -Pflink-runner \
     -Dexec.args="--runner=FlinkRunner \
-      --output=/tmp/kafkamsgs \
+      --output=/home/julie/avroFiles/currConditions \
+      --flinkMaster=localhost \
+      --filesToStage=target/jj-flinkbeam-bundled-1.0-SNAPSHOT.jar" \
+    -Djava.util.logging.config.file=src/main/resources/logging.properties
+
+mvn clean package exec:java -Dexec.mainClass=jj.flinkbeam.AvgSensorData \
+    -Pflink-runner \
+    -Dexec.args="--runner=FlinkRunner \
+      --output=/tmp/SHOULDDELETE \
       --flinkMaster=localhost \
       --filesToStage=target/jj-flinkbeam-bundled-1.0-SNAPSHOT.jar" \
     -Djava.util.logging.config.file=src/main/resources/logging.properties
@@ -122,9 +130,26 @@ public class AvgSensorData {
 
   private static final Logger LOG = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
   static final String KAFKA_SERVER = "localhost:9092";
-  // window size in seconds (in reality, would use it for daily batch load)
-  static final int WINDOW_SIZE = 60; 
-  static final List<String> COLUMNS = Arrays.asList("inputTemperatureProduct",
+  // Used for daily batch load
+  // in simulation, 1 min = 0.25 sec, so 24 hrs = 6 min
+  // for deployment, use 24*3600
+  static final int FIXED_WINDOW_SIZE = 6 * 60; 
+  // static final int FIXED_WINDOW_SIZE = 3 * 60; 
+  // Used for running average calculation
+  // in simulation, 1 min = 0.25 sec, so use 15 (average calulated every 15 sec, with 7.5 sec overlap)
+  // for deployment, use 3600 -- in reality, hour based running avgs w/ 30min overlap
+  static final int SLIDING_WINDOW_SIZE = 15; 
+  // static final int SLIDING_WINDOW_SIZE = 7; 
+  static final List<String> COLUMNS = Arrays.asList("processIsOn",
+                                                    "inputTemperatureProduct",
+                                                    "waterFlowProcess",
+                                                    "intensityFanProcess",
+                                                    "waterTemperatureProcess",
+                                                    "temperatureProcess1",
+                                                    "temperatureProcess2");
+  static final List<String> COLUMNS_FORHBASE = Arrays.asList(
+                                                    "productHumidity",
+                                                    "inputTemperatureProduct",
                                                     "waterFlowProcess",
                                                     "intensityFanProcess",
                                                     "waterTemperatureProcess",
@@ -271,7 +296,7 @@ public class AvgSensorData {
     public void processElement(ProcessContext c) throws ArrayIndexOutOfBoundsException {
       List<String> info = new ArrayList<String>(Arrays.asList(c.element().split(",")));
       Double val = Double.valueOf(info.get(index));
-      String key = String.valueOf(COLUMNS.get(index-2));
+      String key = String.valueOf(COLUMNS.get(index-1));
       c.output(KV.of(key, val));
     }
   }
@@ -290,30 +315,51 @@ public class AvgSensorData {
 
   private static final DateTimeFormatter originalFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
 
-  public static class MakeMutation extends SimpleFunction<String, Mutation> {
+  public static class MakeMutation extends SimpleFunction<KV<String, String>, Mutation> {
 
     Integer index;
+    Boolean isSensor;
 
-    public MakeMutation(Integer index) {
+    public MakeMutation(Boolean isSensor, Integer index) {
       this.index = index;
+      this.isSensor = isSensor;
     }
 
     @Override
-    public Mutation apply(String row) {
-      String[] values = row.split(",");
-      String tstamp = values[0];
+    public Mutation apply(KV<String, String> row) {
+      String tstamp = row.getKey();
+      String[] values = row.getValue().split(",");
+
       TemporalAccessor temporalAccessor = originalFormatter.parse(tstamp);
-      String columnName = COLUMNS.get(index);
       String hbaseColumnName = minFormatter.format(temporalAccessor);
       String date_id = yyyMMddFormatter.format(temporalAccessor);
       String hour_id = hourFormatter.format(temporalAccessor);
-      Double value = Double.parseDouble(values[index+2]);
 
+      String measurementType;
+      String valStr = values[index];
+      // Check if inserting data to hbase for sensor or lab
+      if (isSensor) {
+        measurementType = COLUMNS.get(index);
+      } else {
+        measurementType = "productHumidity";
+      }
       // rowkey design: [factory_id]#[oven_id]#[meter_id]#[yyyyMMdd]#[HH]
       // under the assumption that the common queries conducted by analysts are on hourly basis
       // meter_id is same as the fieldName from original data (e.g. temperatureProcess1)
-      byte[] rowKey = ("001#001#" + columnName + "#" + date_id + "#" + hour_id).getBytes(StandardCharsets.UTF_8);
-      return makeBatchMutation(rowKey, hbaseColumnName, value);
+      byte[] rowKey = ("001#001#" + measurementType + "#" + date_id + "#" + hour_id).getBytes(StandardCharsets.UTF_8);
+      
+      // Check if measurement type is "processIsOn"
+      if (measurementType == "processIsOn") {
+        // "1" = true, "0" = false
+        Boolean value = "1".equals(valStr);
+        return makeBatchMutationBools(rowKey, hbaseColumnName, value);
+      } else {
+        // all other values are doubles
+        Double value = Double.parseDouble(valStr);
+        return makeBatchMutationDoubs(rowKey, hbaseColumnName, value);
+      }
+      
+
     }
   }
 
@@ -325,24 +371,26 @@ public class AvgSensorData {
     final Configuration conf = HBaseConfiguration.create();
 
     // Build the Avro schema for the Avro output.
-    // Schema schema = null;
     File file = new File("avroSchema.avsc");
     String path = file.getAbsolutePath();
     String schemaJson = getSchema(path);
     Schema schema = new Schema.Parser().parse(schemaJson);
 
-    // Duration averagingInterval = Duration.millis(Math.round(1000 * 60 * (options.getAveragingInterval())));
-
+    /* 
+    * Batch Pipeline: send current conditions to both Avro and HBase
+    */
     // Read Oven Sensor data
-    PCollection<KV<String,String>> sensorData = p
+    PCollection<String> sensorDataFromKafka = p
       .apply("GetMessages", KafkaIO.<Long, String>read()
-          .withBootstrapServers(KAFKA_SERVER)
-          .withTopic("sensor")
-          .withKeyDeserializer(LongDeserializer.class)
-          .withValueDeserializer(StringDeserializer.class).withoutMetadata())
-      .apply("ExtractValues", Values.<String>create())
+        .withBootstrapServers(KAFKA_SERVER)
+        .withTopic("sensor")
+        .withKeyDeserializer(LongDeserializer.class)
+        .withValueDeserializer(StringDeserializer.class).withoutMetadata())
+      .apply("ExtractValues", Values.<String>create());
+    
+    PCollection<KV<String,String>> sensorData = sensorDataFromKafka
       .apply("ByTimestamp", ParDo.of(new SetTimestampAsKey()))
-      .apply("TimeWindow", Window.into(FixedWindows.of(Duration.standardSeconds(WINDOW_SIZE))));
+      .apply("TimeWindow", Window.into(FixedWindows.of(Duration.standardSeconds(FIXED_WINDOW_SIZE))));
 
     // Read Lab Humidity data
     PCollection<KV<String,String>> labData = p
@@ -353,13 +401,23 @@ public class AvgSensorData {
           .withValueDeserializer(StringDeserializer.class).withoutMetadata())
       .apply("ExtractValues", Values.<String>create())
       .apply("ByTimestamp", ParDo.of(new SetTimestampAsKey()))
-      .apply("TimeWindow", Window.into(FixedWindows.of(Duration.standardSeconds(WINDOW_SIZE))));
+      .apply("TimeWindow", Window.into(FixedWindows.of(Duration.standardSeconds(FIXED_WINDOW_SIZE))));
 
+    // Batch load to HBase
+    for (int i=0; i<COLUMNS.size(); i++) {
+      sensorData.apply("ToHBaseMutation", MapElements.via(new MakeMutation(true, i)))//
+                .apply("WriteCurrentConditionsToHBase", HBaseIO.write() //
+                    .withConfiguration(conf).withTableId(options.getLoadTableName()));
+    }
 
+    labData.apply("ToHBaseMutation", MapElements.via(new MakeMutation(false, 0)))//
+           .apply("WriteCurrentConditionsToHBase", HBaseIO.write() //
+              .withConfiguration(conf).withTableId(options.getLoadTableName()));
+
+    // Merging two PCollections to one for writing to Avro 
     final TupleTag<String> sensorTag = new TupleTag<String>();
     final TupleTag<String> labTag = new TupleTag<String>();
 
-    // Merge collection values into a CoGbkResult collection.
     PCollection<KV<String, CoGbkResult>> mergedData =
       KeyedPCollectionTuple.of(sensorTag, sensorData)
                           .and(labTag, labData)
@@ -394,36 +452,23 @@ public class AvgSensorData {
             c.output(combinedRow);
         }}));
 
+    // Write as Avro to local file. 
+    // TODO: send to hdfs directly; currently there's an error with AvroIO.to() not recognizing "hdfs" file scheme
     mergedTable.apply("ConvertCSVtoAvro", ParDo.of(new ConvertCsvToAvro(schemaJson)))
                .setCoder(AvroCoder.of(GenericRecord.class, schema))
                .apply("WriteAsAvro", AvroIO.writeGenericRecords(schema)
                         .to(options.getOutput()).withSuffix(".avro")
                         .withNumShards(1).withWindowedWrites());
 
-    // to create one row for each day per column in HBase
-    for (int i=0; i<COLUMNS.size(); i++) {
-      mergedTable.apply("ToHBaseMutation", MapElements.via(new MakeMutation(i)))//
-                 .apply("WriteCurrentConditionsToHBase", HBaseIO.write() //
-                    .withConfiguration(conf).withTableId(options.getLoadTableName()));
-    }
 
     /* 
     * Stream Pipeline: running average of all sensor values over 30 minute windows (frequency of 2)
     */
-    // Read Oven Sensor data
-    PCollection<String> currentSensorData = p
-      .apply("GetMessages", KafkaIO.<Long, String>read()
-          .withBootstrapServers(KAFKA_SERVER)
-          .withTopic("sensor")
-          .withKeyDeserializer(LongDeserializer.class)
-          .withValueDeserializer(StringDeserializer.class).withoutMetadata())
-      .apply("ExtractValues", Values.<String>create());
-
-    // PCollection<KV<String,Float>> currDataKV = 
-    PCollection<String> currentSensorDataToSplit = currentSensorData //
+    // Add sliding window to sensor data
+    PCollection<String> currentSensorDataToSplit = sensorDataFromKafka //
       .apply("TimeWindow", Window.into(SlidingWindows //
-              .of(Duration.standardSeconds(WINDOW_SIZE))
-              .every(Duration.standardSeconds(WINDOW_SIZE/2))));
+              .of(Duration.standardSeconds(SLIDING_WINDOW_SIZE))
+              .every(Duration.standardSeconds(SLIDING_WINDOW_SIZE/2))));
 
     // Split each column to K,V for averaging, then find the average
     PCollection<KV<String,String>> inputTempProduct = currentSensorDataToSplit //
@@ -494,13 +539,13 @@ public class AvgSensorData {
       .withValueSerializer(StringSerializer.class)
     );
 
-    // Write to HBase    
+    // Write to HBase 
     inputTempProduct.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
       @Override
       public Mutation apply(KV<String, String> input) {
         return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
-    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
     
     waterFlowProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
@@ -508,7 +553,7 @@ public class AvgSensorData {
       public Mutation apply(KV<String, String> input) {
         return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
-    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
       
     intensityFanProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
@@ -516,7 +561,7 @@ public class AvgSensorData {
       public Mutation apply(KV<String, String> input) {
         return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
-    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
       
     waterTempProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
@@ -524,7 +569,7 @@ public class AvgSensorData {
       public Mutation apply(KV<String, String> input) {
         return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
-    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
       
     tempProcess1.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
@@ -532,7 +577,7 @@ public class AvgSensorData {
       public Mutation apply(KV<String, String> input) {
         return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
-    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
       
     tempProcess2.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
@@ -540,14 +585,19 @@ public class AvgSensorData {
       public Mutation apply(KV<String, String> input) {
         return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
       }
-    })).apply("WriteAvgsToHBase", HBaseIO.<String, String>write() //
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
       .withConfiguration(conf).withTableId(options.getTableName()));
-      
+
 
     p.run();
   }
 
-  private static Mutation makeBatchMutation(byte[] rowkey, String columnName,Double value) {
+  private static Mutation makeBatchMutationDoubs(byte[] rowkey, String columnName,Double value) {
+    return new Put(rowkey)
+        .addColumn(COLUMN_FAMILY, Bytes.toBytes(columnName), Bytes.toBytes(value));
+  }
+
+  private static Mutation makeBatchMutationBools(byte[] rowkey, String columnName,Boolean value) {
     return new Put(rowkey)
         .addColumn(COLUMN_FAMILY, Bytes.toBytes(columnName), Bytes.toBytes(value));
   }

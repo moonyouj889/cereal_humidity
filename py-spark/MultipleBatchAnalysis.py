@@ -19,7 +19,7 @@ import os
 import argparse
 import datetime
 from dateutil.parser import parse
-
+import subprocess
 
 '''
 Make sure that the avro files are in HDFS prior to running the application.
@@ -39,15 +39,28 @@ $HBASE_HOME/lib/guava-12.0.1.jar,\
 $HBASE_HOME/lib/hbase-protocol*.jar,\
 $HBASE_HOME/lib/htrace-core-3.1.0-incubating.jar,\
 $HBASE_HOME/lib/metrics-core-2.2.0.jar \
---files $HBASE_HOME/conf/hbase-site.xml CerealHumidity.py 
-
+--files $HBASE_HOME/conf/hbase-site.xml MultipleBatchAnalysis.py 
 '''
 
 FILEDIR = "hdfs://localhost:9000/user/hadoop/cereal/data/"
-FILENAME = "currConditions2019-11-01T16_21_00.000Z-2019-11-01T16_24_00.000Z-pane-0-last-00000-of-00001.avro"
+HBASE_CATALOG = '{"table":{"namespace":"default", "name":"batchHumidityAnalysis"},\
+                "rowkey":"key",\
+                "columns":{\
+                    "key":{"cf":"rowkey", "col":"key", "type":"string"},\
+                    "startTimestamp":{"cf":"METER", "col":"startTimestamp", "type":"string"},\
+                    "endTimestamp":{"cf":"METER", "col":"endTimestamp", "type":"string"},\
+                    "productHumidity":{"cf":"METER", "col":"productHumidity", "type":"double"},\
+                    "avg(waterFlowProcess)":{"cf":"METER", "col":"avgWaterFlowProcess", "type":"double"},\
+                    "avg(intensityFanProcess)":{"cf":"METER", "col":"avgIntensityFanProcess", "type":"double"},\
+                    "avg(waterTemperatureProcess)":{"cf":"METER", "col":"avgWaterTemperatureProcess", "type":"double"},\
+                    "avg(temperatureProcess1)":{"cf":"METER", "col":"avgTemperatureProcess1", "type":"double"},\
+                    "avg(temperatureProcess2)":{"cf":"METER", "col":"avgTemperatureProcess2", "type":"double"},\
+                    "avg(inputTemperatureProduct)":{"cf":"METER", "col":"avginputTemperatureProduct", "type":"double"}\
+                    }\
+                }'
 
-def main(spark):
-    df = spark.read.format("avro").load(args.fileDir + args.avroFile)
+def main(spark, avroFilePath):
+    df = spark.read.format("avro").load(avroFilePath)
     orderedAvro = df.orderBy(df.timestamp)
     partitionMarkers = df.where(df.productHumidity.isNotNull()).select(df.timestamp).orderBy(df.timestamp).collect()
     fileDate, startDate = "", ""
@@ -89,54 +102,42 @@ def main(spark):
             dailyAvgsTable = newAvgsRow
         startDate = date.timestamp
 
-    print("===================================================================")
-    # print(dailyAvgsTable.schema.names)
-    for row in dailyAvgsTable.collect():
-        print(row)
-
+    # print("===================================================================")
+    # # print(dailyAvgsTable.schema.names)
+    # for row in dailyAvgsTable.collect():
+    #     print(row)
 
     #Write to HBase
-    catalog = '{"table":{"namespace":"default", "name":"batchHumidityAnalysis"},\
-                "rowkey":"key",\
-                "columns":{\
-                    "key":{"cf":"rowkey", "col":"key", "type":"string"},\
-                    "startTimestamp":{"cf":"METER", "col":"startTimestamp", "type":"string"},\
-                    "endTimestamp":{"cf":"METER", "col":"endTimestamp", "type":"string"},\
-                    "productHumidity":{"cf":"METER", "col":"productHumidity", "type":"double"},\
-                    "avg(waterFlowProcess)":{"cf":"METER", "col":"avgWaterFlowProcess", "type":"double"},\
-                    "avg(intensityFanProcess)":{"cf":"METER", "col":"avgIntensityFanProcess", "type":"double"},\
-                    "avg(waterTemperatureProcess)":{"cf":"METER", "col":"avgWaterTemperatureProcess", "type":"double"},\
-                    "avg(temperatureProcess1)":{"cf":"METER", "col":"avgTemperatureProcess1", "type":"double"},\
-                    "avg(temperatureProcess2)":{"cf":"METER", "col":"avgTemperatureProcess2", "type":"double"},\
-                    "avg(inputTemperatureProduct)":{"cf":"METER", "col":"avg(inputTemperatureProduct)", "type":"double"}\
-                    }\
-                }'
     dailyAvgsTable.write\
-        .options(catalog=catalog)\
+        .options(catalog=HBASE_CATALOG)\
         .format("org.apache.spark.sql.execution.datasources.hbase")\
         .save()
 
     for row in dailyAvgsTable.select(dailyAvgsTable.key).collect():
         print("wrote to HBase in table \"batchHumidityAnalysis\" row: {}".format(row.key))
 
-    batchHumidityAnalysisDf = spark.read \
-        .options(catalog=catalog) \
-        .format('org.apache.spark.sql.execution.datasources.hbase') \
-        .load()
-
-    print("=========================")
-    batchHumidityAnalysisDf.show()
-
 if __name__ == '__main__':
     spark = SparkSession.builder.appName("CerealHumidity").config("spark.hadoop.validateOutputSpecs", False).getOrCreate()
     log4j = spark.sparkContext._jvm.org.apache.log4j
     log4j.LogManager.getRootLogger().setLevel(log4j.Level.ERROR)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--fileDir", help="HDFS directory of the avro file", type=str, default=FILEDIR)
-    parser.add_argument("--avroFile", help="avro file name to perform batch analysis on", type=str, default=FILENAME)
-    args = parser.parse_args()
+    shellCommand = "export HADOOP_USER_NAME=root && $HADOOP_HOME/bin/hdfs dfs -ls {}*.avro |  awk '{{print $8}}'".format(FILEDIR)
+    print(shellCommand)
+    try:
+        p = subprocess.Popen(shellCommand, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        for filepath in p.stdout.readlines():
+            print(filepath.decode('utf-8').rstrip('\n'))
+            main(spark, filepath.decode('utf-8').rstrip('\n'))
 
-    main(spark)
+        # Check if batch analysis performed successfully
+        batchHumidityAnalysisDf = spark.read \
+            .options(catalog=HBASE_CATALOG) \
+            .format('org.apache.spark.sql.execution.datasources.hbase') \
+            .load()
+
+        print("============================================================")
+        batchHumidityAnalysisDf.show()
+    except:
+        ("could not read from p")
 
     spark.stop()
