@@ -27,16 +27,18 @@ import java.lang.invoke.MethodHandles;
 
 /*
 mvn compile exec:java -Dexec.mainClass=jj.flinkbeam.AvroToLog \
-    -Djava.util.logging.config.file=src/main/resources/logging.properties \
+    -Djava.util.logging.config.file=src/main/resources/logging.properties
 */
 
 public class AvroToLog {
   private static final Logger LOG = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
-  
-  private static final String FILEPATH = "/tmp/kafkamsgs2019-10-22T11:59:00.000Z-2019-10-22T12:00:00.000Z-pane-0-last-00000-of-00001.avro";
+
+  private static final String FILEPATH = "/Users/juliejung/Documents/deProjects/cereal_humidity/py-spark/avroFiles/kafkamsgs2019-10-26T13:06:00.000Z-2019-10-26T13:12:00.000Z-pane-0-last-00000-of-00001.avro";
+
   public static void main(String[] args) throws IOException {
 
-    Schema schema = new Schema.Parser().parse("{\"amespace\": \"foodDrying.avro\",\"type\": \"record\",\"name\": \"sensorAndLab\",\"fields\": [{\"name\": \"timestamp\", \"type\": \"string\"},{\"name\": \"productHumidity\",  \"type\": [\"null\", \"float\"]},{\"name\": \"processOn\",  \"type\": \"boolean\"},{\"name\": \"inputTemperatureProduct\", \"type\": \"float\"},{\"name\": \"waterFlowProcess\", \"type\": \"float\"},{\"name\": \"intensityFanProcess\", \"type\": \"float\"},{\"name\": \"waterTemperatureProcess\", \"type\": \"float\"},{\"name\": \"temperatureProcess1\", \"type\": \"float\"},{\"name\": \"temperatureProcess2\", \"type\": \"float\"}]}");
+    Schema schema = new Schema.Parser().parse(
+        "{\"amespace\": \"foodDrying.avro\",\"type\": \"record\",\"name\": \"sensorAndLab\",\"fields\": [{\"name\": \"timestamp\", \"type\": \"string\"},{\"name\": \"productHumidity\",  \"type\": [\"null\", \"float\"]},{\"name\": \"processOn\",  \"type\": \"boolean\"},{\"name\": \"inputTemperatureProduct\", \"type\": \"float\"},{\"name\": \"waterFlowProcess\", \"type\": \"float\"},{\"name\": \"intensityFanProcess\", \"type\": \"float\"},{\"name\": \"waterTemperatureProcess\", \"type\": \"float\"},{\"name\": \"temperatureProcess1\", \"type\": \"float\"},{\"name\": \"temperatureProcess2\", \"type\": \"float\"}]}");
     DatumReader<GenericRecord> datumReader = new GenericDatumReader<GenericRecord>(schema);
     File datafile = new File(FILEPATH);
     DataFileReader<GenericRecord> dataFileReader = new DataFileReader<GenericRecord>(datafile, datumReader);
@@ -46,7 +48,8 @@ public class AvroToLog {
       // allocating and garbage collecting many objects for files with
       // many items.
       row = dataFileReader.next(row);
-      LOG.info(row.toString());
+      System.out.println(row.toString());
+      // LOG.info(row.toString());
     }
   }
 }
