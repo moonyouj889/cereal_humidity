@@ -39,7 +39,7 @@ There are three problems that this project aims to solve:
 
 - Speed Layer (Apache Beam/Flink Runner, HBase, Kafka): On top of ingesting the data using KafkaIO with the batch layer, the real time analysis of running average of all meter readings was conducted. The results were both stored in HBase and published to a separate topic, "averages", on Kafka for the Dashboard web interface.
 
-- Serving Layer (Apache HBase): HBase ultimately stores three main tables: "runningAvgAnalysis", "currentConditions", and "batchHumidityAnalysis". The table schema is optimized for quick access for future queries or further analyses. The rowkey design will be discussed further in [HBase Schema Design](#hbase-schema-design)
+- Serving Layer (Apache HBase): HBase ultimately stores three main tables: "runningAvgAnalysis", "currentConditions", and "batchHumidityAnalysis". The table schema is optimized for quick access for future queries or further analyses. The rowkey design is discussed further in [HBase Schema Design](#hbase-schema-design)
 
 ## Data Simulation
 
@@ -103,11 +103,92 @@ The `SlidingWindows` on an hourly basis with period of half an hour was specific
 
 ## HBase Schema Design
 
-### "currentConditions"
+### "currentConditions" Table
+<table>
+  <tr>
+    <th rowspan="2">Row Key</th>
+    <th colspan="4">Column Family: "METER"</th>
+  </tr>
+  <tr>
+<!--     <th>Row Key</th> -->
+    <th>COLUMN: 00</th>
+    <th>COLUMN: 01</th>
+    <th>...</th>
+    <th>COLUMN: 59</th>
+  </tr>
+  <tr>
+    <td>001#001#inputTemperatureProduct#20140521#19</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+  </tr>
+</table>
 
-### "batchHumidityAnalysis"
 
-### "runningAvgAnalysis"
+
+### "batchHumidityAnalysis" Table
+<table>
+  <tr>
+    <th rowspan="2">Row Key</th>
+    <th colspan="9">Column Family: "METER"</th>
+  </tr>
+  <tr>
+<!--     <th>Row Key</th> -->
+    <th>COLUMN: startTimestamp</th>
+    <th>COLUMN: endTimestamp</th>
+    <th>COLUMN: productHumidity</th>
+    <th>COLUMN: avgWaterFlowProcess</th>
+    <th>COLUMN: avgIntensityFanProcess</th>
+    <th>COLUMN: avgWaterTemperatureProcess</th>
+    <th>COLUMN: avgTemperatureProcess1</th>
+    <th>COLUMN: avgTemperatureProcess2</th>
+    <th>COLUMN: avginputTemperatureProduct</th>
+  </tr>
+  <tr>
+    <td>001#001#20140521#0454#1058</td>
+    <td>2014-05-21T04:54:00-04:00</td>
+    <td>2014-05-21T10:58:00-04:00</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+  </tr>
+</table>
+
+Row Key: "001#001#{}#{}#{}".format(fileDateYYYYMMDD, startTimeHHMM, endTimeHHMM)
+
+### "runningAvgAnalysis" Table
+<table>
+  <tr>
+    <th rowspan="2">Row Key</th>
+    <th colspan="7">Column Family: "METER"</th>
+  </tr>
+  <tr>
+<!--     <th>Row Key</th> -->
+    <th>COLUMN: processIsOn</th>
+    <th>COLUMN: inputTemperatureProduct</th>
+    <th>COLUMN: waterFlowProcess</th>
+    <th>COLUMN: intensityFanProcess</th>
+    <th>COLUMN: waterTemperatureProcess</th>
+    <th>COLUMN: temperatureProcess1</th>
+    <th>COLUMN: temperatureProcess2</th>
+  </tr>
+  <tr>
+    <td>001#001#201911031349</td>
+    <td>true</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+    <td>...</td>
+  </tr>
+</table>
+Row Key: {factory_id}#{oven_id}#{yyyyMMddHHmm} of actual time
 
 ## Results
 
@@ -139,7 +220,8 @@ Graphical representation of the results of the batch analyses performed by Spark
 
 
 ### Miscellaneous Improvements
-
+- Apache Phoenix ...
+- Security
 
 
 ## Licensing
