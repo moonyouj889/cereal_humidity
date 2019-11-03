@@ -414,7 +414,7 @@ public class AvgSensorData {
         .and(labTag, labData).apply("MergeLabAndSensor", CoGroupByKey.<String>create());
 
     PCollection<String> mergedTable = mergedData //
-        .apply("ExtractValuesAndConvertToStr", ParDo.of(new DoFn<KV<String, CoGbkResult>, String>() {
+        .apply("ExtractValuesAndConvertToCSV", ParDo.of(new DoFn<KV<String, CoGbkResult>, String>() {
           @ProcessElement
           public void processElement(ProcessContext c) throws Exception {
             KV<String, CoGbkResult> kvRow = c.element();
