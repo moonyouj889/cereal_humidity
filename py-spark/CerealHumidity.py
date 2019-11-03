@@ -45,6 +45,21 @@ $HBASE_HOME/lib/metrics-core-2.2.0.jar \
 
 FILEDIR = "hdfs://localhost:9000/user/hadoop/cereal/data/"
 FILENAME = "currConditions2019-11-01T16_21_00.000Z-2019-11-01T16_24_00.000Z-pane-0-last-00000-of-00001.avro"
+HBASE_CATALOG = '{"table":{"namespace":"default", "name":"batchHumidityAnalysis"},\
+                "rowkey":"key",\
+                "columns":{\
+                    "key":{"cf":"rowkey", "col":"key", "type":"string"},\
+                    "startTimestamp":{"cf":"METER", "col":"startTimestamp", "type":"string"},\
+                    "endTimestamp":{"cf":"METER", "col":"endTimestamp", "type":"string"},\
+                    "productHumidity":{"cf":"METER", "col":"productHumidity", "type":"double"},\
+                    "avg(waterFlowProcess)":{"cf":"METER", "col":"avgWaterFlowProcess", "type":"double"},\
+                    "avg(intensityFanProcess)":{"cf":"METER", "col":"avgIntensityFanProcess", "type":"double"},\
+                    "avg(waterTemperatureProcess)":{"cf":"METER", "col":"avgWaterTemperatureProcess", "type":"double"},\
+                    "avg(temperatureProcess1)":{"cf":"METER", "col":"avgTemperatureProcess1", "type":"double"},\
+                    "avg(temperatureProcess2)":{"cf":"METER", "col":"avgTemperatureProcess2", "type":"double"},\
+                    "avg(inputTemperatureProduct)":{"cf":"METER", "col":"avginputTemperatureProduct", "type":"double"}\
+                    }\
+                }'
 
 def main(spark):
     df = spark.read.format("avro").load(args.fileDir + args.avroFile)
@@ -89,30 +104,14 @@ def main(spark):
             dailyAvgsTable = newAvgsRow
         startDate = date.timestamp
 
-    print("===================================================================")
-    # print(dailyAvgsTable.schema.names)
-    for row in dailyAvgsTable.collect():
-        print(row)
-
+    # print("===================================================================")
+    # # print(dailyAvgsTable.schema.names)
+    # for row in dailyAvgsTable.collect():
+    #     print(row)
 
     #Write to HBase
-    catalog = '{"table":{"namespace":"default", "name":"batchHumidityAnalysis"},\
-                "rowkey":"key",\
-                "columns":{\
-                    "key":{"cf":"rowkey", "col":"key", "type":"string"},\
-                    "startTimestamp":{"cf":"METER", "col":"startTimestamp", "type":"string"},\
-                    "endTimestamp":{"cf":"METER", "col":"endTimestamp", "type":"string"},\
-                    "productHumidity":{"cf":"METER", "col":"productHumidity", "type":"double"},\
-                    "avg(waterFlowProcess)":{"cf":"METER", "col":"avgWaterFlowProcess", "type":"double"},\
-                    "avg(intensityFanProcess)":{"cf":"METER", "col":"avgIntensityFanProcess", "type":"double"},\
-                    "avg(waterTemperatureProcess)":{"cf":"METER", "col":"avgWaterTemperatureProcess", "type":"double"},\
-                    "avg(temperatureProcess1)":{"cf":"METER", "col":"avgTemperatureProcess1", "type":"double"},\
-                    "avg(temperatureProcess2)":{"cf":"METER", "col":"avgTemperatureProcess2", "type":"double"},\
-                    "avg(inputTemperatureProduct)":{"cf":"METER", "col":"avg(inputTemperatureProduct)", "type":"double"}\
-                    }\
-                }'
     dailyAvgsTable.write\
-        .options(catalog=catalog)\
+        .options(catalog=HBASE_CATALOG)\
         .format("org.apache.spark.sql.execution.datasources.hbase")\
         .save()
 
