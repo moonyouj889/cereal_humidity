@@ -76,7 +76,7 @@ Even though the data was sent to Kafka in relations to the actual time, the date
 
 ## Data Pipeline
 
-![Beam DAG](./imgs/beamDAG.png)
+![Beam DAG](./imgs/beamDag.png)
 
 The Beam Pipeline diagram above provides the step by step view of how the data was ingested, aggregated, and loaded, or stream inserted. Starting from the top, the data was read and ingested from Kafka. Then, the pipeline was branched to the stream (on the left), and batch (on the right) processing.
 
