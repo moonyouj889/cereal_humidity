@@ -67,7 +67,7 @@ Since the original data was cleaned manually and all of the data were gathered i
 
 ### SpeedFactor
 
-When running the `send_meter_data.py` to lauch the data publishing simulation to Kafka, the user must provide the `speedFactor`. The `speedFactor` allows the user to quicken the simulation of data. For example, if the user provides the SpeedFactor of 60, one event row of the original data would be sent per second, quickening the simulation time to be 60 times faster than actual time. More accurately, after the change in the schema, one row of the sensor data would be sent to Kafka per seconds, but the time between lab data would vary, depending on the report time. To match the original data time increment, the user must provide the SpeedFactor of 1. In the testing environment, I used the speedFactor of 240, meaning one row of sensor data was published roughly in 0.25 second.
+When running the `send_meter_data.py` to lauch the data publishing simulation to Kafka, the user must provide the `speedFactor`. The `speedFactor` allows the user to quicken the simulation of data. For example, if the user provides the SpeedFactor of 60, one event row of the original data would be sent per second, quickening the simulation time to be 60 times faster than actual time. More accurately, after the change in the schema from the original raw data, one row of the sensor data would be sent to Kafka per seconds, but the time between lab data would vary, depending on the report time. To match the original data time increment, the user must provide the SpeedFactor of 1. In the testing environment, I used the speedFactor of 240, meaning one row of sensor data was published roughly in 0.25 second.
 
 ### Simulation Time vs. Actual Time
 
@@ -78,7 +78,7 @@ Even though the data was sent to Kafka in relations to the actual time, the date
 
 ![Beam DAG](./imgs/beamDag.png)
 
-The Beam Pipeline diagram above provides the step by step view of how the data was ingested, aggregated, and loaded, or stream inserted. Starting from the top, the data was read and ingested from Kafka. Then, the pipeline was branched to the stream (on the left), and batch (on the right) processing.
+The Beam Pipeline diagram above provides the step by step view of how the data was ingested, aggregated, and loaded, or stream inserted. Starting from the top, the data was read and ingested from Kafka. Then, the pipeline was branched to the stream (on the left), and batch (on the right) processing. As indicated on the diagram, the stream pipeline is marked yellow and the batch pipeline is marked light gray. Within the batch pipeline, the transforms to send to Avro for Spark is indicated in orange and the transforms to send current Conditions to HBase is marked with dark gray.
 
 Here is what Apache Flink displayed while running the job:
 ![Beam DAG](./imgs/flink.png)
@@ -86,14 +86,13 @@ Here is what Apache Flink displayed while running the job:
 
 ### Stream Processing
 
-In the stream processing, the `SlidingWindows` was set, and the general meter readings of each building was aggregated according to the window created to calculate the Mean. The `SlidingWindows` took two requird arguments -- `size` and `period`. The size indicates how wide the window should be in seconds, and the period indicates for how long (in seconds) the aggregation must be recalculated. A sliding window of 60 seconds with period of 30 seconds would look something like this:
+In the stream processing, the `SlidingWindows` was set, and the general meter readings of each building was aggregated according to the window created to calculate the Mean. The `SlidingWindows` took two arguments -- `size` and `period`. The size indicates how wide the window should be in seconds, and the period indicates for how long (in seconds) the aggregation must be recalculated, leading to overlaps in each window. The window overlaps with `SlidingWindows` is useful for calculating the running averages. A sliding window of 60 seconds with period of 30 seconds would look something like this:
 
  <p align="center"><font size="-1">
     <img src="https://beam.apache.org/images/sliding-time-windows.png" width="70%"></br>
-          <i>Source: <a href="https://beam.apache.org/documentation/programming-guide/)*">"Beam Programming Guide"</i></a></font></p>
+          <i>Source: <a href="https://beam.apache.org/documentation/programming-guide/#windowing">"Beam Programming Guide"</i></a></font></p>
 
-The `SlidingWindows` on an hourly basis with period of half an hour was specifically chosen instead of a regular `FixedWindows`, because the default `FixedWindows` waits until the end of the window to produce the aggregation results. Since the aim of the stream pipeline was to calculate the real time average of the energy readings, the `SlidingWindows` was chosen.
-
+The running average values are published to Kafka under the topic, "averages", in a CSV row format for ease of accesss of recent running average values. Kafka keeps the data for 7 days by default, so anyone who is not skilled in Spark or querying HBase could easily retrieve the data from the past 7 days with the `--from-beginning` option, on top of the Web Dashboard consuming the data for display.
 
 ### Batch Processing
 
@@ -103,6 +102,10 @@ The `SlidingWindows` on an hourly basis with period of half an hour was specific
 
 ## HBase Schema Design
 
+All three tables' row keys start with `001#001`, which represent the factory ID, followed by the oven ID, which would be utilized in a scenario where multiple factories/product lines with multiple ovens/other units to keep track of. It is not a good practice to simply use the timestamps at the beginning of the key because it could lead to hotspotting. Of course, with the data used, there's only one factory and one oven, so all entries began with `001#001`, but the amount of data was small enough that HBase could handle easily with the writes. 
+
+In a case where only one factory with only one oven is the subject of interest, and the number of sensors is significantly higher with each data recorded at a very rapid rate (in seconds or milliseconds), manual classification of the sensors by assigning each with an id, or automatic salting of data would be a potential solution to avoid hotspotting. 
+
 ### "currentConditions" Table
 <table>
   <tr>
@@ -110,7 +113,6 @@ The `SlidingWindows` on an hourly basis with period of half an hour was specific
     <th colspan="4">Column Family: "METER"</th>
   </tr>
   <tr>
-<!--     <th>Row Key</th> -->
     <th>COLUMN: 00</th>
     <th>COLUMN: 01</th>
     <th>...</th>
@@ -125,7 +127,10 @@ The `SlidingWindows` on an hourly basis with period of half an hour was specific
   </tr>
 </table>
 
+Row Key: `[factory ID]#[oven ID]#[measurement Type]#[date from data in YYYYMMDD format]#[hour from data in HH format]`
 
+The "currentConditions" table contains data as shown through the HBase shell:
+![currconHBase](./imgs/currconHBase.png)
 
 ### "batchHumidityAnalysis" Table
 <table>
@@ -159,17 +164,19 @@ The `SlidingWindows` on an hourly basis with period of half an hour was specific
   </tr>
 </table>
 
-Row Key: "001#001#{}#{}#{}".format(fileDateYYYYMMDD, startTimeHHMM, endTimeHHMM)
+Row Key: `[factory ID]#[oven ID]#[date from data in YYYYMMDD format]#[start time in HHMM format]#[end time in HHMM format]`
+
+The "batchHumidityAnalysis" table contains data as shown through the HBase shell:
+![batchHBase](./imgs/batchHBase.png)
 
 ### "runningAvgAnalysis" Table
 <table>
   <tr>
     <th rowspan="2">Row Key</th>
-    <th colspan="7">Column Family: "METER"</th>
+    <th colspan="6">Column Family: "METER"</th>
   </tr>
   <tr>
 <!--     <th>Row Key</th> -->
-    <th>COLUMN: processIsOn</th>
     <th>COLUMN: inputTemperatureProduct</th>
     <th>COLUMN: waterFlowProcess</th>
     <th>COLUMN: intensityFanProcess</th>
@@ -179,7 +186,6 @@ Row Key: "001#001#{}#{}#{}".format(fileDateYYYYMMDD, startTimeHHMM, endTimeHHMM)
   </tr>
   <tr>
     <td>001#001#201911031349</td>
-    <td>true</td>
     <td>...</td>
     <td>...</td>
     <td>...</td>
@@ -188,7 +194,14 @@ Row Key: "001#001#{}#{}#{}".format(fileDateYYYYMMDD, startTimeHHMM, endTimeHHMM)
     <td>...</td>
   </tr>
 </table>
-Row Key: {factory_id}#{oven_id}#{yyyyMMddHHmm} of actual time
+Row Key: `[factory ID]#[oven ID]#[actual time in yyyyMMddHHmm format]`
+
+Typing the HBase shell command:
+![runningHBase_1](./imgs/runningHBase_1.png)
+
+Provides a result as such:
+![runningHBase_2](./imgs/runningHBase_2.png)
+
 
 ## Results
 
@@ -206,22 +219,36 @@ Graphical representation of the running averages collected from the past 24 hour
 Batch page displays the average sensor data between product humidity measurements. Each humidity measurement has corresponding average data values.
 
 ![flask_batchAnalysis](./imgs/batchAnalysis.gif)
-Graphical representation of the results of the batch analyses performed by Spark for the past week
 
 
 
 ## How To Run Locally
+### Technologies and Versions Used
+#### Data Technologies
+- Apache Hadoop (3.2.1)
+- Apache Spark/PySpark (2.4.4) 
+- Apache HBase (1.4.11)
+- Apache Flink (1.8.2)
+- Apache Beam (2.16.0)
+- Apache Kafka (2.3.0)
 
-
+#### Languages
+- Java SE 8 (JDK 8)
+- Python3.7 (3.7.4)
+  - Flask (1.1.1)
+  - HappyBase (1.2.0)
+  - kafka-python (1.4.7)
+  - python-dateutil (2.6.1)
 
 ## Further Improvements
 
 ### Improvements for Optimization
-
+- split beam to stream and batch jobs
+- get rid of avro and read from hbase
+- 
 
 ### Miscellaneous Improvements
 - Apache Phoenix ...
-- Security
 
 
 ## Licensing
