@@ -1,4 +1,4 @@
-# cereal_humidity
+# Cereal Factory Product Humidity Monitoring
 
 ## Introduction
 
