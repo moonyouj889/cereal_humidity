@@ -467,27 +467,27 @@ public class AvgSensorData {
 
     // Split each column to K,V for averaging, then find the average
     PCollection<KV<String, String>> inputTempProduct = currentSensorDataToSplit //
-        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(2))).apply("AvgByTimestamp", Mean.perKey())
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(2))).apply("AvgBySensor", Mean.perKey())
         .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
 
     PCollection<KV<String, String>> waterFlowProcess = currentSensorDataToSplit //
-        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(3))).apply("AvgByTimestamp", Mean.perKey())
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(3))).apply("AvgBySensor", Mean.perKey())
         .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
 
     PCollection<KV<String, String>> intensityFanProcess = currentSensorDataToSplit //
-        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(4))).apply("AvgByTimestamp", Mean.perKey())
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(4))).apply("AvgBySensor", Mean.perKey())
         .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
 
     PCollection<KV<String, String>> waterTempProcess = currentSensorDataToSplit //
-        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(5))).apply("AvgByTimestamp", Mean.perKey())
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(5))).apply("AvgBySensor", Mean.perKey())
         .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
 
     PCollection<KV<String, String>> tempProcess1 = currentSensorDataToSplit //
-        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(6))).apply("AvgByTimestamp", Mean.perKey())
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(6))).apply("AvgBySensor", Mean.perKey())
         .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
 
     PCollection<KV<String, String>> tempProcess2 = currentSensorDataToSplit //
-        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(7))).apply("AvgByTimestamp", Mean.perKey())
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(7))).apply("AvgBySensor", Mean.perKey())
         .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
 
     // Send out to kafka with topic=averages
