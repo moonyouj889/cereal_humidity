@@ -139,7 +139,6 @@ The "currentConditions" table contains data as shown through the HBase shell:
     <th colspan="9">Column Family: "METER"</th>
   </tr>
   <tr>
-<!--     <th>Row Key</th> -->
     <th>COLUMN: startTimestamp</th>
     <th>COLUMN: endTimestamp</th>
     <th>COLUMN: productHumidity</th>
@@ -176,7 +175,6 @@ The "batchHumidityAnalysis" table contains data as shown through the HBase shell
     <th colspan="6">Column Family: "METER"</th>
   </tr>
   <tr>
-<!--     <th>Row Key</th> -->
     <th>COLUMN: inputTemperatureProduct</th>
     <th>COLUMN: waterFlowProcess</th>
     <th>COLUMN: intensityFanProcess</th>
