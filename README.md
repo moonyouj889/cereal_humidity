@@ -80,8 +80,7 @@ Even though the data was sent to Kafka in relations to the actual time, the date
 
 The Beam Pipeline diagram above provides the step by step view of how the data was ingested, aggregated, and loaded, or stream inserted. Starting from the top, the data was read and ingested from Kafka. Then, the pipeline was branched to the stream (on the left), and batch (on the right) processing. As indicated on the diagram, the stream pipeline is marked yellow and the batch pipeline is marked light gray. Within the batch pipeline, the transforms to send to Avro for Spark is indicated in orange and the transforms to send current Conditions to HBase is marked with dark gray.
 
-Here is what Apache Flink displayed while running the job:
-![Beam DAG](./imgs/flink.png)
+Here is what Apache Flink displayed while running the job:![Beam DAG](./imgs/flink.png)
 
 
 ### Stream Processing
@@ -192,7 +191,7 @@ The "batchHumidityAnalysis" table contains data as shown through the HBase shell
     <td>...</td>
   </tr>
 </table>
-Row Key: `[factory ID]#[oven ID]#[actual time in yyyyMMddHHmm format]`
+Row Key: `[factory ID]#[oven ID]#[actual time in yyyyMMddHHmm format]`<br/>
 
 Typing the HBase shell command:
 ![runningHBase_1](./imgs/runningHBase_1.png)
