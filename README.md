@@ -37,7 +37,7 @@ There are three problems that this project aims to solve:
   1. The sensor data and lab data were merged into one PCollection and translated into Avro files, creating one file per day. These avro files were saved on HDFS for Apache Spark to ingest. With Spark, the data was split based on timestamps of when the humidity measurements were reported. Then, the average values of sensor data before each measurement and after the last measurement of each were calculated. 
   1. The sensor data and lab data remained separate and were translated to HBase viable format and inserted into the HBase tables for further querying and analyses.
 
-- Speed Layer (Apache Beam/Flink Runner, HBase, Kafka): On top of ingesting the data using KafkaIO with the batch layer, the real time analysis of running average of all meter readings was conducted. The results were both stored in HBase and published to a separate topic, "averages", on Kafka for the Dashboard web interface.
+- Speed Layer (Apache Beam/Flink Runner): On top of ingesting the data using KafkaIO with the batch layer, the real time analysis of running average of all meter readings was conducted. The results were both stored in HBase and published to a separate topic, "averages", on Kafka for the Dashboard web interface.
 
 - Serving Layer (Apache HBase): HBase ultimately stores three main tables: "runningAvgAnalysis", "currentConditions", and "batchHumidityAnalysis". The table schema is optimized for quick access for future queries or further analyses. The rowkey design is discussed further in [HBase Schema Design](#hbase-schema-design)
 
