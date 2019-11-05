@@ -14,8 +14,8 @@ There are three problems that this project aims to solve:
 
 1. [Architecture](#architecture)
 1. [Data Simulation](#data-simulation)
-1. [Data Pipeline](#data-pipeline)
 1. [HBase Schema Design](#hbase-schema-design)
+1. [Data Pipeline](#data-pipeline)
 1. [Results](#results)
 1. [How To Run Locally](#how-to-run-locally)
 1. [Further Improvements](#further-improvements)
@@ -73,32 +73,6 @@ When running the `send_meter_data.py` to lauch the data publishing simulation to
 
 Even though the data was sent to Kafka in relations to the actual time, the datetime values were kept as the original values, rather than recreated at the time of publishing to Kafka. This was for the development environment so that the "currentConditions" and "batchHumidityAnalysis" tables do not receive new rows for the same original data every time the Beam or Spark application are run for testing. On the other hand, the actual time was used to simulate real time behavior for running averages, so "runningAvgAnalysis" data is saved in relations to the actual time, and streaming data page of the Web Dashboard displays the actual time of the values' update.  
 
-
-## Data Pipeline
-
-![Beam DAG](./imgs/beamDag.png)
-
-The Beam Pipeline diagram above provides the step by step view of how the data was ingested, aggregated, and loaded, or stream inserted. Starting from the top, the data was read and ingested from Kafka. Then, the pipeline was branched to the stream (on the left), and batch (on the right) processing. As indicated on the diagram, the stream pipeline is marked yellow and the batch pipeline is marked light gray. Within the batch pipeline, the transforms to send to Avro for Spark is indicated in orange and the transforms to send current Conditions to HBase is marked with dark gray.
-
-Here is what Apache Flink displayed while running the job:![Beam DAG](./imgs/flink.png)
-
-
-### Stream Processing
-
-In the stream processing, the `SlidingWindows` was set, and the general meter readings of each building was aggregated according to the window created to calculate the Mean. The `SlidingWindows` took two arguments -- `size` and `period`. The size indicates how wide the window should be in seconds, and the period indicates for how long (in seconds) the aggregation must be recalculated, leading to overlaps in each window. The window overlaps with `SlidingWindows` is useful for calculating the running averages. A sliding window of 60 seconds with period of 30 seconds would look something like this:
-
- <p align="center"><font size="-1">
-    <img src="https://beam.apache.org/images/sliding-time-windows.png" width="70%"></br>
-          <i>Source: <a href="https://beam.apache.org/documentation/programming-guide/#windowing">"Beam Programming Guide"</i></a></font></p>
-
-The running average values are published to Kafka under the topic, "averages", in a CSV row format for ease of accesss of recent running average values. Kafka keeps the data for 7 days by default, so anyone who is not skilled in Spark or querying HBase could easily retrieve the data from the past 7 days with the `--from-beginning` option, on top of the Web Dashboard consuming the data for display.
-
-### Batch Processing
-
-#### Current Conditions
-
-#### Daily Aggregate Analysis
-
 ## HBase Schema Design
 
 All three tables' row keys start with `001#001`, which represent the factory ID, followed by the oven ID, which would be utilized in a scenario where multiple factories/product lines with multiple ovens/other units to keep track of. It is not a good practice to simply use the timestamps at the beginning of the key because it could lead to hotspotting. Of course, with the data used, there's only one factory and one oven, so all entries began with `001#001`, but the amount of data was small enough that HBase could handle easily with the writes. 
@@ -126,7 +100,11 @@ In a case where only one factory with only one oven is the subject of interest, 
   </tr>
 </table>
 
-Row Key: `[factory ID]#[oven ID]#[measurement Type]#[date from data in YYYYMMDD format]#[hour from data in HH format]`
+- Row Key Design: 
+  - `[factory ID]#[oven ID]#[measurement Type]#[date from data in YYYYMMDD format]#[hour from data in HH format]`
+- It was assumed that the common queries would be on an hourly basis, based on the measurement type, so each HBase row contains data within a specific hour of a specific date for a certain measurement type (e.g., inputTemperatureProduct, temperatureProcess1, etc.)
+- All of the cells within the column family, `"METER"` represents the minute the sensor data was recorded, from 00 to 59. 
+
 
 The "currentConditions" table contains data as shown through the HBase shell:
 ![currconHBase](./imgs/currconHBase.png)
@@ -162,7 +140,9 @@ The "currentConditions" table contains data as shown through the HBase shell:
   </tr>
 </table>
 
-Row Key: `[factory ID]#[oven ID]#[date from data in YYYYMMDD format]#[start time in HHMM format]#[end time in HHMM format]`
+- Row Key Design
+  - `[factory ID]#[oven ID]#[date from data in YYYYMMDD format]#[start time in HHMM format]#[end time in HHMM format]`
+- The `startTimestamp` and `endTimestamp` columns signify the earliest time after the last product humidity measurement and the time of the current product humidity measurement the averages are being calculated for.
 
 The "batchHumidityAnalysis" table contains data as shown through the HBase shell:
 ![batchHBase](./imgs/batchHBase.png)
@@ -191,7 +171,10 @@ The "batchHumidityAnalysis" table contains data as shown through the HBase shell
     <td>...</td>
   </tr>
 </table>
-Row Key: `[factory ID]#[oven ID]#[actual time in yyyyMMddHHmm format]`<br/>
+- Row Key Design
+  - `[factory ID]#[oven ID]#[actual time in yyyyMMddHHmm format]`
+- Unlike the aforementioned row keys of `"currentConditions"` and `"batchHumidityAnalysis"`, the row key of this table uses the actual time the running averages were inserted into HBase.
+- The datetime used for rowkey only shows the minute, and not seconds, since the updated values with latency should not be inserted to a new row, but rather updated.
 
 Typing the HBase shell command:
 ![runningHBase_1](./imgs/runningHBase_1.png)
@@ -200,11 +183,38 @@ Provides a result as such:
 ![runningHBase_2](./imgs/runningHBase_2.png)
 
 
+## Data Pipeline
+
+![Beam DAG](./imgs/beamDag.png)
+
+The Beam Pipeline diagram above provides the step by step view of how the data was ingested, aggregated, and loaded, or stream inserted. Starting from the top, the data was read and ingested from Kafka. Then, the pipeline was branched to the stream (on the left), and batch (on the right) processing. As indicated on the diagram, the stream pipeline is marked yellow and the batch pipeline is marked light gray. Within the batch pipeline, the transforms to send to Avro for Spark is indicated in orange and the transforms to send current Conditions to HBase is marked with dark gray.
+
+Here is what Apache Flink displayed while running the job:![Beam DAG](./imgs/flink.png)
+
+
+### Stream Processing
+
+In the stream processing, the `SlidingWindows` was set, and the general meter readings of each building was aggregated according to the window created to calculate the Mean. The `SlidingWindows` took two arguments -- `size` and `period`. The size indicates how wide the window should be in seconds, and the period indicates for how long (in seconds) the aggregation must be recalculated, leading to overlaps in each window. The window overlaps with `SlidingWindows` is useful for calculating the running averages. A sliding window of 60 seconds with period of 30 seconds would look something like this:
+
+ <p align="center"><font size="-1">
+    <img src="https://beam.apache.org/images/sliding-time-windows.png" width="70%"></br>
+          <i>Source: <a href="https://beam.apache.org/documentation/programming-guide/#windowing">"Beam Programming Guide"</i></a></font></p>
+
+The running average values are published to Kafka under the topic, "averages", in a CSV row format for ease of accesss of recent running average values. Kafka keeps the data for 7 days by default, so anyone who is not skilled in Spark or querying HBase could easily retrieve the data from the past 7 days with the `--from-beginning` option, on top of the Web Dashboard consuming the data for display.
+
+### Batch Processing
+#### Current Conditions
+As shown in the Beam pipeline diagram, the sensor and lab data to be loaded onto HBase did not need to be merged beforehand unlike the PCollection used for creating daily Avro files. Also while the processing for Avro required the productHumidity values to be explicitly marked as an empty string while converting to CSV after merging the two PCollections, the processing for HBase simply could be done right after ingesting the two data sources. This was possible partially by the row key design of `"currentConditions"` table separating rows by measurement type. However, even if the `"currentConditions"` table took rows with the similar format as the CSV rows sent to Kafka to the "sensor" topic, the PCollections would not have had to be merged. This is due to the fundamental way HBase stores its data. Unlike a standard RBDMS, which requires an explicit value be present for every row, HBase allows the row to be inserted with empty columns. Of course, in RBDMS, you could insert `NULL`, but `NULL` actually signifies that the actual value is not present. In a streaming case as this, data arrives at different times, and for data that arrives outside its time window, it is a better option to leave the cell empty, rather than fill it with a value that takes up memory.
+
+#### Daily Aggregate Analysis
+The sensor data and lab data were merged into one PCollection and translated into Avro files, creating one file per day. These avro files were saved on HDFS for Apache Spark to ingest. Unfortunately, there was an issue with Beam's AvroIO not being able to recognize the HDFS file scheme, and the files had to be copied from local to HDFS using the script, [`cleanMoveAvro.sh`](./avroCleanup/cleanMoveAvro.sh). Since HDFS cannot comprehend file names with `:`, the script called the python script, [`cleanMoveAvro.py`](./avroCleanup/cleanMoveAvro.py), which converted all colons to underscores before transferring the files to HDFS.
+
+It was assumed that the data from the previous day would be analyzed with Spark every day. The spark application first reads and saves the Avro file as a DataFrame, extracts datetime values of when the product humidity values were measured, and the DataFrame was manually partitioned according to the datetimes extracted. For example, if the DataFrame contained data from 5/21/14 at 12:00AM to 5/21/14 at 11:59PM, and the datetimes extracted were 3:00AM, 12:00PM, and 10:00PM on 5/21/14, the three DataFrames to aggregate would be data from 12:00AM to 3:00AM, 3:01AM to 12:00PM, and 12:01PM to 10:00PM on 5/21/14. The data after 10:00PM would be discarded under the assumption that the next humidity measurement in the lab would not occur until after a normal work hour for lab technicians or scientists, so the sensor data recorded after the last humidity measurement would not impact the humidity of the product sample from the morning of the next day as much. After calculating the averages of all sensor data per each partitioned DataFrame, they were stored in HBase in the `"batchHumidityAnalysis"` along with their corresponding product humidity values.
+
 ## Results
 
 ![flask_curr](./imgs/localhost_3000_current.png)
-Current/index page displays the streaming data of current sensor data as well as their running averages. The graphs below display the running average values from the past 24 hours of the current time.
-
+Current/index page displays the streaming data of current sensor data as well as their running averages. The graphs below display the running average values from the past 24 hours of the current time. The demo was produced with the `speedFactor` of 240, so the data from the "past 24 hours" had only 12 data points due to the HBase schema design of saving data by minute, not seconds.
 
 ![flask_streamDash](./imgs/streamDash.gif) <br/>
 Live demo of streaming current sensor data and running averages data onto the Web Dashboard.
@@ -242,7 +252,7 @@ Batch page displays the average sensor data between product humidity measurement
 ### Improvements for Optimization
 - split beam to stream and batch jobs
 - get rid of avro and read from hbase
-- 
+- hbase current conditions (get rid of for loop and loop through row instead to add `Put().addColumn()`)
 
 ### Miscellaneous Improvements
 - Apache Phoenix ...
