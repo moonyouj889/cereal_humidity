@@ -1,4 +1,3 @@
-
 // Copyright 2019 Julie Jung <moonyouj889@gmail.com>
 
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +22,11 @@ import java.util.Arrays;
 import java.util.stream.Stream;
 import java.util.stream.Collectors;
 import java.util.Collection;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.time.ZoneId;
+import java.time.temporal.TemporalAccessor;
+import java.nio.charset.StandardCharsets;
 
 import org.apache.beam.sdk.options.Validation.Required;
 import org.apache.beam.sdk.options.PipelineOptions;
@@ -62,7 +66,12 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.beam.sdk.io.AvroIO;
 import org.apache.beam.sdk.io.TextIO;
-import org.apache.beam.sdk.io.FileSystems;
+import org.apache.beam.sdk.io.hbase.HBaseIO;
+import org.apache.hadoop.hbase.HBaseConfiguration;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.client.Mutation;
+import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.util.Bytes;
 
 import java.io.File;
 import org.joda.time.Duration;
@@ -87,13 +96,13 @@ mvn compile exec:java -Dexec.mainClass=jj.flinkbeam.MainPipeline \
     -Pflink-runner \
     -Djava.util.logging.config.file=src/main/resources/logging.properties \
     -Dexec.args="--runner=FlinkRunner \
-      --output=hdfs://localhost:9000/cereal/data \
+      --output=/tmp/kafkamsgs \
       --flinkMaster=localhost" 
 
 mvn -e -X clean package exec:java -Dexec.mainClass=jj.flinkbeam.MainPipeline \
     -Pflink-runner \
     -Dexec.args="--runner=FlinkRunner \
-      --output=hdfs://localhost:9000/cereal/data \
+      --output=/tmp/currConditions \
       --flinkMaster=localhost \
       --filesToStage=target/jj-flinkbeam-bundled-1.0-SNAPSHOT.jar" \
     -Djava.util.logging.config.file=src/main/resources/logging.properties
@@ -101,7 +110,15 @@ mvn -e -X clean package exec:java -Dexec.mainClass=jj.flinkbeam.MainPipeline \
 mvn clean package exec:java -Dexec.mainClass=jj.flinkbeam.MainPipeline \
     -Pflink-runner \
     -Dexec.args="--runner=FlinkRunner \
-      --output=hdfs://localhost:9000/cereal/data \
+      --output=/home/julie/avroFiles/currConditions \
+      --flinkMaster=localhost \
+      --filesToStage=target/jj-flinkbeam-bundled-1.0-SNAPSHOT.jar" \
+    -Djava.util.logging.config.file=src/main/resources/logging.properties
+
+mvn clean package exec:java -Dexec.mainClass=jj.flinkbeam.MainPipeline \
+    -Pflink-runner \
+    -Dexec.args="--runner=FlinkRunner \
+      --output=/tmp/SHOULDDELETE \
       --flinkMaster=localhost \
       --filesToStage=target/jj-flinkbeam-bundled-1.0-SNAPSHOT.jar" \
     -Djava.util.logging.config.file=src/main/resources/logging.properties
@@ -114,19 +131,23 @@ public class MainPipeline {
   private static final Logger LOG = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
   static final String KAFKA_SERVER = "localhost:9092";
   // Used for daily batch load
-  // in simulation, 1 min = 0.5 sec, so use 12 * 60 (12 min interval for one Avro file to another)
+  // in simulation, 1 min = 0.25 sec, so 24 hrs = 6 min
   // for deployment, use 24*3600
-  static final int FIXED_WINDOW_SIZE = 12 * 60; 
+  static final int FIXED_WINDOW_SIZE = 6 * 60;
+  // static final int FIXED_WINDOW_SIZE = 3 * 60;
+
   // Used for running average calculation
-  // in simulation, 1 min = 0.5 sec, so use 30 (average calulated every 30 sec, with 15 sec overlap)
-  // for deployment, use 3600 -- in reality, hour based running avgs w/ 30min overlap
-  static final int SLIDING_WINDOW_SIZE = 30; 
-  static final List<String> COLUMNS = Arrays.asList("inputTemperatureProduct",
-                                                    "waterFlowProcess",
-                                                    "intensityFanProcess",
-                                                    "waterTemperatureProcess",
-                                                    "temperatureProcess1",
-                                                    "temperatureProcess2");
+  // in simulation, 1 min = 0.25 sec, so use 15 (average calulated every 15 sec,
+  // with 7.5 sec overlap)
+  // for deployment, use 3600 -- in reality, hour based running avgs w/ 30min
+  // overlap
+  static final int SLIDING_WINDOW_SIZE = 15;
+  // static final int SLIDING_WINDOW_SIZE = 7;
+  static final List<String> COLUMNS = Arrays.asList("processIsOn", "inputTemperatureProduct", "waterFlowProcess",
+      "intensityFanProcess", "waterTemperatureProcess", "temperatureProcess1", "temperatureProcess2");
+  static final List<String> COLUMNS_FORHBASE = Arrays.asList("productHumidity", "inputTemperatureProduct",
+      "waterFlowProcess", "intensityFanProcess", "waterTemperatureProcess", "temperatureProcess1",
+      "temperatureProcess2");
 
   public interface MyOptions extends StreamingOptions {
 
@@ -148,12 +169,23 @@ public class MainPipeline {
     Double getSpeedupFactor();
 
     void setSpeedupFactor(Double d);
-    
+
+    @Description("HBase table name for running averages")
+    @Default.String("runningAvgAnalysis")
+    String getTableName();
+
+    void setTableName(String output);
+
+    @Description("HBase table name for current conditions")
+    @Default.String("currentConditions")
+    String getLoadTableName();
+
+    void setLoadTableName(String output);
+
   }
 
   public static String getSchema(String schemaPath) throws IOException {
-    ReadableByteChannel chan = FileSystems.open(FileSystems.matchNewResource(
-        schemaPath, false));
+    ReadableByteChannel chan = FileSystems.open(FileSystems.matchNewResource(schemaPath, false));
 
     try (InputStream stream = Channels.newInputStream(chan)) {
       BufferedReader streamReader = new BufferedReader(new InputStreamReader(stream, "UTF-8"));
@@ -167,13 +199,11 @@ public class MainPipeline {
       return dataBuilder.toString();
     }
   }
-  
 
   public static class ConvertCsvToAvro extends DoFn<String, GenericRecord> {
 
     private String delimiter;
     private String schemaStr;
-
 
     public ConvertCsvToAvro(String schemaStr) {
       this.schemaStr = schemaStr;
@@ -196,18 +226,19 @@ public class MainPipeline {
         Schema.Field field = fields.get(index);
         Schema.Type fieldType = field.schema().getType();
         String fieldTypeName = "";
-        if (Schema.Type.UNION.equals(fieldType)) { 
+        if (Schema.Type.UNION.equals(fieldType)) {
           if (rowVal.isEmpty()) {
             fieldTypeName = "null";
           } else {
-            // TODO: hardcoded for now. Need to accept whatever fieldtype it gives. not just float
+            // TODO: hardcoded for now. Need to accept whatever fieldtype it gives. not just
+            // float
             // fieldTypeName = fieldType.values()[1] ...?
             fieldTypeName = "float";
           }
         } else {
           fieldTypeName = fieldType.getName().toLowerCase().toLowerCase();
         }
-       
+
         switch (fieldTypeName) {
         case "string":
           genericRecord.put(field.name(), rowVal);
@@ -261,13 +292,13 @@ public class MainPipeline {
     public void processElement(ProcessContext c) throws ArrayIndexOutOfBoundsException {
       List<String> info = new ArrayList<String>(Arrays.asList(c.element().split(",")));
       Double val = Double.valueOf(info.get(index));
-      String key = String.valueOf(COLUMNS.get(index-2));
+      String key = String.valueOf(COLUMNS.get(index - 1));
       c.output(KV.of(key, val));
     }
   }
 
   public static class ConvertToStringKV extends DoFn<KV<String, Double>, KV<String, String>> {
-    
+
     @ProcessElement
     public void processElement(ProcessContext c) throws Exception {
       Double val = c.element().getValue();
@@ -278,59 +309,113 @@ public class MainPipeline {
     }
   }
 
+  private static final DateTimeFormatter originalFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
+
+  public static class MakeMutation extends SimpleFunction<KV<String, String>, Mutation> {
+
+    Integer index;
+    Boolean isSensor;
+
+    public MakeMutation(Boolean isSensor, Integer index) {
+      this.index = index;
+      this.isSensor = isSensor;
+    }
+
+    @Override
+    public Mutation apply(KV<String, String> row) {
+      String tstamp = row.getKey();
+      String[] values = row.getValue().split(",");
+
+      TemporalAccessor temporalAccessor = originalFormatter.parse(tstamp);
+      String hbaseColumnName = minFormatter.format(temporalAccessor);
+      String date_id = yyyMMddFormatter.format(temporalAccessor);
+      String hour_id = hourFormatter.format(temporalAccessor);
+
+      String measurementType;
+      String valStr = values[index];
+      // Check if inserting data to hbase for sensor or lab
+      if (isSensor) {
+        measurementType = COLUMNS.get(index);
+      } else {
+        measurementType = "productHumidity";
+      }
+      // rowkey design: [factory_id]#[oven_id]#[meter_id]#[yyyyMMdd]#[HH]
+      // under the assumption that the common queries conducted by analysts are on
+      // hourly basis
+      // meter_id is same as the fieldName from original data (e.g.
+      // temperatureProcess1)
+      byte[] rowKey = ("001#001#" + measurementType + "#" + date_id + "#" + hour_id).getBytes(StandardCharsets.UTF_8);
+
+      // Check if measurement type is "processIsOn"
+      if (measurementType == "processIsOn") {
+        // "1" = true, "0" = false
+        Boolean value = "1".equals(valStr);
+        return makeBatchMutationBools(rowKey, hbaseColumnName, value);
+      } else {
+        // all other values are doubles
+        Double value = Double.parseDouble(valStr);
+        return makeBatchMutationDoubs(rowKey, hbaseColumnName, value);
+      }
+
+    }
+  }
+
   public static void main(String[] args) throws IOException, IllegalArgumentException {
 
     MyOptions options = PipelineOptionsFactory.fromArgs(args).withValidation().as(MyOptions.class);
     options.setStreaming(true);
-    // FileSystems.setDefaultPipelineOptions(options);
     Pipeline p = Pipeline.create(options);
+    final Configuration conf = HBaseConfiguration.create();
 
     // Build the Avro schema for the Avro output.
-    // Schema schema = null;
     File file = new File("avroSchema.avsc");
     String path = file.getAbsolutePath();
     String schemaJson = getSchema(path);
     Schema schema = new Schema.Parser().parse(schemaJson);
 
-    /* 
-    * Batch Loading Pipeline: Collecting sensor data and humidity data, convert to Avro, and save to hdfs
-    */
+    /*
+     * Batch Pipeline: send current conditions to both Avro and HBase
+     */
     // Read Oven Sensor data
-    PCollection<KV<String,String>> sensorData = p
-      .apply("GetMessages", KafkaIO.<Long, String>read()
-          .withBootstrapServers(KAFKA_SERVER)
-          .withTopic("sensor")
-          .withKeyDeserializer(LongDeserializer.class)
-          .withValueDeserializer(StringDeserializer.class).withoutMetadata())
-      .apply("ExtractValues", Values.<String>create())
-      .apply("ByTimestamp", ParDo.of(new SetTimestampAsKey()))
-      .apply("TimeWindow", Window.into(FixedWindows.of(Duration.standardSeconds(FIXED_WINDOW_SIZE))));
+    PCollection<String> sensorDataFromKafka = p.apply("GetSensorDataMessages",
+        KafkaIO.<Long, String>read().withBootstrapServers(KAFKA_SERVER).withTopic("sensor")
+            .withKeyDeserializer(LongDeserializer.class).withValueDeserializer(StringDeserializer.class)
+            .withoutMetadata())
+        .apply("ExtractValues", Values.<String>create());
+
+    PCollection<KV<String, String>> sensorData = sensorDataFromKafka
+        .apply("ByTimestamp", ParDo.of(new SetTimestampAsKey()))
+        .apply("TimeWindow", Window.into(FixedWindows.of(Duration.standardSeconds(FIXED_WINDOW_SIZE))));
 
     // Read Lab Humidity data
-    PCollection<KV<String,String>> labData = p
-      .apply("GetMessages", KafkaIO.<Long, String>read()
-          .withBootstrapServers(KAFKA_SERVER) 
-          .withTopic("lab")
-          .withKeyDeserializer(LongDeserializer.class)
-          .withValueDeserializer(StringDeserializer.class).withoutMetadata())
-      .apply("ExtractValues", Values.<String>create())
-      .apply("ByTimestamp", ParDo.of(new SetTimestampAsKey()))
-      .apply("TimeWindow", Window.into(FixedWindows.of(Duration.standardSeconds(FIXED_WINDOW_SIZE))));
+    PCollection<KV<String, String>> labData = p
+        .apply("GetLabDataMessages",
+            KafkaIO.<Long, String>read().withBootstrapServers(KAFKA_SERVER).withTopic("lab")
+                .withKeyDeserializer(LongDeserializer.class).withValueDeserializer(StringDeserializer.class)
+                .withoutMetadata())
+        .apply("ExtractValues", Values.<String>create()).apply("ByTimestamp", ParDo.of(new SetTimestampAsKey()))
+        .apply("TimeWindow", Window.into(FixedWindows.of(Duration.standardSeconds(FIXED_WINDOW_SIZE))));
 
+    // Batch load to HBase
+    for (int i = 0; i < COLUMNS.size(); i++) {
+      sensorData.apply("ToHBaseMutation", MapElements.via(new MakeMutation(true, i)))//
+          .apply("WriteCurrentConditionsToHBase", HBaseIO.write() //
+              .withConfiguration(conf).withTableId(options.getLoadTableName()));
+    }
 
+    labData.apply("ToHBaseMutation", MapElements.via(new MakeMutation(false, 0)))//
+        .apply("WriteCurrentConditionsToHBase", HBaseIO.write() //
+            .withConfiguration(conf).withTableId(options.getLoadTableName()));
+
+    // Merging two PCollections to one for writing to Avro
     final TupleTag<String> sensorTag = new TupleTag<String>();
     final TupleTag<String> labTag = new TupleTag<String>();
 
-    // Merge collection values into a CoGbkResult collection.
-    PCollection<KV<String, CoGbkResult>> mergedData =
-      KeyedPCollectionTuple.of(sensorTag, sensorData)
-                          .and(labTag, labData)
-                          .apply(CoGroupByKey.<String>create());
-
+    PCollection<KV<String, CoGbkResult>> mergedData = KeyedPCollectionTuple.of(sensorTag, sensorData)
+        .and(labTag, labData).apply("MergeLabAndSensor", CoGroupByKey.<String>create());
 
     PCollection<String> mergedTable = mergedData //
-      .apply("ExtractValues", ParDo.of(
-        new DoFn<KV<String, CoGbkResult>, String>() {
+        .apply("ExtractValuesAndConvertToCSV", ParDo.of(new DoFn<KV<String, CoGbkResult>, String>() {
           @ProcessElement
           public void processElement(ProcessContext c) throws Exception {
             KV<String, CoGbkResult> kvRow = c.element();
@@ -339,119 +424,174 @@ public class MainPipeline {
             timestampList.add(timestamp);
             Iterable<String> sensorVals = kvRow.getValue().getAll(sensorTag);
             Iterable<String> labVals = kvRow.getValue().getAll(labTag);
-            // TODO: This is a hacky way of doing it. Figure out if it's possible to convert from Iterable to List more gracefully
+            // TODO: This is a hacky way of doing it. Figure out if it's possible to convert
+            // from Iterable to List more gracefully
             // Or if there is a way to combine the Iterables, instead of converting to Lists
             List<String> sensorList = new ArrayList<String>();
             List<String> labList = new ArrayList<String>();
-            for (String sensorVal : sensorVals) {sensorList.add(sensorVal);}
-            for (String labVal : labVals) {labList.add(labVal);}
-            // if no lab result taken at this time, leave it as an empty string so schema fits
-            if (labList.isEmpty()) {labList.add("");}
+            for (String sensorVal : sensorVals) {
+              sensorList.add(sensorVal);
+            }
+            for (String labVal : labVals) {
+              labList.add(labVal);
+            }
+            // if no lab result taken at this time, leave it as an empty string so schema
+            // fits
+            if (labList.isEmpty()) {
+              labList.add("");
+            }
+            // List<String> sensorValsList = Lists.newArrayList(myIterator);
             List<String> combinedList = Stream.of(timestampList, labList, sensorList) //
-                                               .flatMap(Collection::stream)
-                                               .collect(Collectors.toList());
+                .flatMap(Collection::stream).collect(Collectors.toList());
             String combinedRow = String.join(",", combinedList);
 
             c.output(combinedRow);
-        }}));
+          }
+        }));
 
+    // Write as Avro to local file.
+    // TODO: send to hdfs directly; currently there's an error with AvroIO.to() not
+    // recognizing "hdfs" file scheme
     mergedTable.apply("ConvertCSVtoAvro", ParDo.of(new ConvertCsvToAvro(schemaJson)))
-               .setCoder(AvroCoder.of(GenericRecord.class, schema))
-               .apply("WriteAsAvro", AvroIO.writeGenericRecords(schema).withSuffix(".avro")
-                        // .to(FileSystems.matchNewResource(options.getOutput(), true))
-                        .to(options.getOutput())
-                        .withTempDirectory(FileSystems.matchNewResource("hdfs://localhost:9000/temporary", true))
-                        .withNumShards(1).withWindowedWrites());
- 
+        .setCoder(AvroCoder.of(GenericRecord.class, schema)).apply("WriteAsAvro", AvroIO.writeGenericRecords(schema)
+            .to(options.getOutput()).withSuffix(".avro").withNumShards(1).withWindowedWrites());
 
-    /* 
-    * Real Time Processing Pipeline: running average of all sensor values over 30 minute windows (frequency of 2)
-    */
-    // Read Oven Sensor data
-    PCollection<String> currentSensorData = p
-      .apply("GetMessages", KafkaIO.<Long, String>read()
-          .withBootstrapServers(KAFKA_SERVER)
-          .withTopic("sensor")
-          .withKeyDeserializer(LongDeserializer.class)
-          .withValueDeserializer(StringDeserializer.class).withoutMetadata())
-      .apply("ExtractValues", Values.<String>create());
-
-    // PCollection<KV<String,Float>> currDataKV = 
-    PCollection<String> currentSensorDataToSplit = currentSensorData //
-      .apply("TimeWindow", Window.into(SlidingWindows //
-              .of(Duration.standardSeconds(SLIDING_WINDOW_SIZE))
-              .every(Duration.standardSeconds(SLIDING_WINDOW_SIZE/2))));
+    /*
+     * Stream Pipeline: running average of all sensor values over 30 minute windows
+     * (frequency of 2)
+     */
+    // Add sliding window to sensor data
+    PCollection<String> currentSensorDataToSplit = sensorDataFromKafka //
+        .apply("TimeWindow", Window.into(SlidingWindows //
+            .of(Duration.standardSeconds(SLIDING_WINDOW_SIZE))
+            .every(Duration.standardSeconds(SLIDING_WINDOW_SIZE / 2))));
 
     // Split each column to K,V for averaging, then find the average
-    PCollection<KV<String,String>> inputTempProduct = currentSensorDataToSplit //
-      .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(2)))
-      .apply("AvgByTimestamp", Mean.perKey())
-      .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
-    
-    PCollection<KV<String,String>> waterFlowProcess = currentSensorDataToSplit //
-      .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(3)))
-      .apply("AvgByTimestamp", Mean.perKey())
-      .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
+    PCollection<KV<String, String>> inputTempProduct = currentSensorDataToSplit //
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(2))).apply("AvgBySensor", Mean.perKey())
+        .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
 
-    PCollection<KV<String,String>> intensityFanProcess = currentSensorDataToSplit //
-      .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(4)))
-      .apply("AvgByTimestamp", Mean.perKey())
-      .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
-    
-    PCollection<KV<String,String>> waterTempProcess = currentSensorDataToSplit //
-      .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(5)))
-      .apply("AvgByTimestamp", Mean.perKey())
-      .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
-    
-    PCollection<KV<String,String>> tempProcess1 = currentSensorDataToSplit //
-      .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(6)))
-      .apply("AvgByTimestamp", Mean.perKey())
-      .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
+    PCollection<KV<String, String>> waterFlowProcess = currentSensorDataToSplit //
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(3))).apply("AvgBySensor", Mean.perKey())
+        .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
 
-    PCollection<KV<String,String>> tempProcess2 = currentSensorDataToSplit //
-      .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(7)))
-      .apply("AvgByTimestamp", Mean.perKey())
-      .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
-    
-    
-    inputTempProduct.apply("PublishAvgsToKafka", KafkaIO.<String, String>write()
-      .withBootstrapServers(KAFKA_SERVER)
-      .withTopic("averages")
-      .withKeySerializer(StringSerializer.class)
-      .withValueSerializer(StringSerializer.class)
-    );
+    PCollection<KV<String, String>> intensityFanProcess = currentSensorDataToSplit //
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(4))).apply("AvgBySensor", Mean.perKey())
+        .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
 
-    waterFlowProcess.apply("PublishAvgsToKafka", KafkaIO.<String, String>write()
-      .withBootstrapServers(KAFKA_SERVER)
-      .withTopic("averages")
-      .withKeySerializer(StringSerializer.class)
-      .withValueSerializer(StringSerializer.class)
-    );
-    intensityFanProcess.apply("PublishAvgsToKafka", KafkaIO.<String, String>write()
-      .withBootstrapServers(KAFKA_SERVER)
-      .withTopic("averages")
-      .withKeySerializer(StringSerializer.class)
-      .withValueSerializer(StringSerializer.class)
-    );
-    waterTempProcess.apply("PublishAvgsToKafka", KafkaIO.<String, String>write()
-      .withBootstrapServers(KAFKA_SERVER)
-      .withTopic("averages")
-      .withKeySerializer(StringSerializer.class)
-      .withValueSerializer(StringSerializer.class)
-    );
-    tempProcess1.apply("PublishAvgsToKafka", KafkaIO.<String, String>write()
-      .withBootstrapServers(KAFKA_SERVER)
-      .withTopic("averages")
-      .withKeySerializer(StringSerializer.class)
-      .withValueSerializer(StringSerializer.class)
-    );
-    tempProcess2.apply("PublishAvgsToKafka", KafkaIO.<String, String>write()
-      .withBootstrapServers(KAFKA_SERVER)
-      .withTopic("averages")
-      .withKeySerializer(StringSerializer.class)
-      .withValueSerializer(StringSerializer.class)
-    );
+    PCollection<KV<String, String>> waterTempProcess = currentSensorDataToSplit //
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(5))).apply("AvgBySensor", Mean.perKey())
+        .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
+
+    PCollection<KV<String, String>> tempProcess1 = currentSensorDataToSplit //
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(6))).apply("AvgBySensor", Mean.perKey())
+        .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
+
+    PCollection<KV<String, String>> tempProcess2 = currentSensorDataToSplit //
+        .apply("ByTimestamp", ParDo.of(new ExtractValOfColumn(7))).apply("AvgBySensor", Mean.perKey())
+        .apply("ConvertToString", ParDo.of(new ConvertToStringKV()));
+
+    // Send out to kafka with topic=averages
+    inputTempProduct.apply("PublishAvgsToKafka", KafkaIO.<String, String>write().withBootstrapServers(KAFKA_SERVER)
+        .withTopic("averages").withKeySerializer(StringSerializer.class).withValueSerializer(StringSerializer.class));
+    waterFlowProcess.apply("PublishAvgsToKafka", KafkaIO.<String, String>write().withBootstrapServers(KAFKA_SERVER)
+        .withTopic("averages").withKeySerializer(StringSerializer.class).withValueSerializer(StringSerializer.class));
+    intensityFanProcess.apply("PublishAvgsToKafka", KafkaIO.<String, String>write().withBootstrapServers(KAFKA_SERVER)
+        .withTopic("averages").withKeySerializer(StringSerializer.class).withValueSerializer(StringSerializer.class));
+    waterTempProcess.apply("PublishAvgsToKafka", KafkaIO.<String, String>write().withBootstrapServers(KAFKA_SERVER)
+        .withTopic("averages").withKeySerializer(StringSerializer.class).withValueSerializer(StringSerializer.class));
+    tempProcess1.apply("PublishAvgsToKafka", KafkaIO.<String, String>write().withBootstrapServers(KAFKA_SERVER)
+        .withTopic("averages").withKeySerializer(StringSerializer.class).withValueSerializer(StringSerializer.class));
+    tempProcess2.apply("PublishAvgsToKafka", KafkaIO.<String, String>write().withBootstrapServers(KAFKA_SERVER)
+        .withTopic("averages").withKeySerializer(StringSerializer.class).withValueSerializer(StringSerializer.class));
+
+    // Write to HBase
+    inputTempProduct.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
+        .withConfiguration(conf).withTableId(options.getTableName()));
+
+    waterFlowProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
+        .withConfiguration(conf).withTableId(options.getTableName()));
+
+    intensityFanProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
+        .withConfiguration(conf).withTableId(options.getTableName()));
+
+    waterTempProcess.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
+        .withConfiguration(conf).withTableId(options.getTableName()));
+
+    tempProcess1.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
+        .withConfiguration(conf).withTableId(options.getTableName()));
+
+    tempProcess2.apply("ToHBaseMutation", MapElements.via(new SimpleFunction<KV<String, String>, Mutation>() {
+      @Override
+      public Mutation apply(KV<String, String> input) {
+        return makeMutation(getThisInstantFormatted(streamFormatter), input.getValue());
+      }
+    })).apply("WriteAvgsToHBase", HBaseIO.write() //
+        .withConfiguration(conf).withTableId(options.getTableName()));
 
     p.run();
   }
+
+  private static Mutation makeBatchMutationDoubs(byte[] rowkey, String columnName, Double value) {
+    return new Put(rowkey).addColumn(COLUMN_FAMILY, Bytes.toBytes(columnName), Bytes.toBytes(value));
+  }
+
+  private static Mutation makeBatchMutationBools(byte[] rowkey, String columnName, Boolean value) {
+    return new Put(rowkey).addColumn(COLUMN_FAMILY, Bytes.toBytes(columnName), Bytes.toBytes(value));
+  }
+
+  private static Mutation makeMutation(String key, String value) {
+    // rowkey design: [factory_id]#[oven_id]#[timestamp of running avg]
+    byte[] rowKey = ("001#001#" + key).getBytes(StandardCharsets.UTF_8);
+    String[] keyval = value.split(",");
+    String columnName = keyval[0];
+    Double dValue = Double.parseDouble(keyval[1]);
+    return new Put(rowKey).addColumn(COLUMN_FAMILY, Bytes.toBytes(columnName), Bytes.toBytes(dValue));
+  }
+
+  private static final byte[] COLUMN_FAMILY = Bytes.toBytes("METER");
+
+  // [yyyyMMdd]#[HH]
+  private static final DateTimeFormatter yyyMMddFormatter = DateTimeFormatter.ofPattern("yyyyMMdd")
+      .withZone(ZoneId.systemDefault());
+
+  private static final DateTimeFormatter hourFormatter = DateTimeFormatter.ofPattern("HH")
+      .withZone(ZoneId.systemDefault());
+
+  private static final DateTimeFormatter minFormatter = DateTimeFormatter.ofPattern("mm")
+      .withZone(ZoneId.systemDefault());
+
+  private static final DateTimeFormatter streamFormatter = DateTimeFormatter.ofPattern("yyyyMMddHHmm")
+      .withZone(ZoneId.systemDefault());
+
+  private static String getThisInstantFormatted(DateTimeFormatter formatter) {
+    Instant instant = Instant.now();
+    return formatter.format(instant);
+  }
+
 }
