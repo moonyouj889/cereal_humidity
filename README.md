@@ -245,7 +245,7 @@ Batch page displays the average sensor data between product humidity measurement
   - kafka-python (1.4.7)
   - python-dateutil (2.6.1)
 
-Hadoop, HBase, and Flink were all operated under the pseudo distributed mode and Kafka and Flask app were run locally.
+***Hadoop, HBase, and Flink were all operated under the pseudo distributed mode, and Kafka and Flask app were run locally.***
 
 ### Breakdown of Files and Their Purpose
 Here is the file structure of this entire project (excluded misc. files):
@@ -343,13 +343,13 @@ Here is the file structure of this entire project (excluded misc. files):
      |-- requirements.txt
      |-- run.py
 ```
-1. Bulk Clean and Move Avro to HDFS
+#### Bulk Clean and Move Avro to HDFS
 ```
 |__ /avroCleanup
     |-- cleanMoveAvro.py
     |-- cleanMoveAvro.sh
 ```
-1. Perform Daily Batch Analysis
+#### Perform Daily Batch Analysis
 ```
 |__ /py-spark
     |-- CerealHumidity.py
