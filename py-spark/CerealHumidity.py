@@ -119,7 +119,7 @@ def main(spark):
         print("wrote to HBase in table \"batchHumidityAnalysis\" row: {}".format(row.key))
 
     batchHumidityAnalysisDf = spark.read \
-        .options(catalog=catalog) \
+        .options(catalog=HBASE_CATALOG) \
         .format('org.apache.spark.sql.execution.datasources.hbase') \
         .load()
 
