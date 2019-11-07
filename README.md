@@ -318,6 +318,18 @@ The original data CSV file can be found in this directory, `food-beverage-drying
     |-- avroSchema.avsc
     |-- pom.xml
 ```
+The Beam pipepline is written in Java, with the help of mvn for package management. To run the pipeline on Flink locally, run this command in a shell while inside the `jj-flinkbeam` directory:
+```
+mvn clean package exec:java -Dexec.mainClass=jj.flinkbeam.MainPipeline \
+    -Pflink-runner \
+    -Dexec.args="--runner=FlinkRunner \
+      --output=/tmp/kafkaAvro- \
+      --flinkMaster=localhost \
+      --filesToStage=target/jj-flinkbeam-bundled-1.0-SNAPSHOT.jar" \
+    -Djava.util.logging.config.file=src/main/resources/logging.properties
+```
+The `--output` from the command signifies the location of the Avro files to be written to in the local file system.
+
 #### Launching Kafka, Producing, and Consuming Data
 ```
 |__ /kafka
