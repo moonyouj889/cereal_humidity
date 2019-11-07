@@ -304,6 +304,8 @@ Here is the file structure of this entire project (excluded misc. files):
     |-- food-beverage-drying-process.csv
     |-- processData.sh
 ```
+The original data CSV file can be found in this directory, `food-beverage-drying-process.csv`. The shell script `processData.sh` runs `cleanUpCSV.py`, which cleans the raw data. The original data is not in chronological order and is delimited by ";". The `cleanUpCSV.py` produces the `/processed_data` folder with the CSV file to be used to send to Kafka.
+
 #### Running the Beam Pipeline on Flink
 ```
 |__ /jj-flinkbeam
