@@ -361,12 +361,25 @@ Before producing the data to Kafka, you must start the Kafka server. This can be
      |-- requirements.txt
      |-- run.py
 ```
+Before running the server, make sure to have all of the required Python libraries, noted in `requirements.txt` installed. Then, you can start the server by:
+```
+python run.py
+```
+Once the server starts, you can view the UI on `localhost:3000`
+
 #### Bulk Clean and Move Avro to HDFS
 ```
 |__ /avroCleanup
     |-- cleanMoveAvro.py
     |-- cleanMoveAvro.sh
 ```
+As mentioned before, there was an issue with `AvroIO` not recognizing the HDFS file scheme in attempt to write the Avro file directly to HDFS. The current project writes the Avro file to the local file system, to the location indicated in the Maven command to run the Beam Pipeline. For testing, I used the `cleanMoveAvro.sh` script that called `cleanMoveAvro.py` on all Avro files produced and put them in HDFS. Before copying the files to HDFS, the directory must be created. The path I used was `/user/hadoop/cereal/data/`. If you wish to use a different setup, make sure to be consisten throughout. 
+
+In a case of one file, you can simply rename the file manually to get rid of the colons (since HDFS cannot accept filenames with colons), and run:
+```
+[hadoop home dir]/bin/hdfs dfs -put [Avro file full path] [HDFS directory to add the files to]
+```
+
 #### Perform Daily Batch Analysis
 ```
 |__ /py-spark
