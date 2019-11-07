@@ -340,6 +340,10 @@ The `--output` from the command signifies the location of the Avro files to be w
     |-- send_sensor_data.py
     |-- startKafka.sh
 ```
+Before producing the data to Kafka, you must start the Kafka server. This can be done with `startKafka.sh`. Then, run `producer.sh`, which runs `send_sensor_data.py`. This python script reads the processed CSV row by row, and simulates the streaming data publishing to Kafka, depending on the `speedFactor` provided by the user. The `speedFactor` can be changed in `producer.sh`. The default setup used for development environment was 240. After the data stream begins, you can check whether the data is properly published by running `consumerSensor.sh` for sensor data and `consumerLab.sh` for lab data. If the Flink job is running, you could check the running averages being published to Kafka with `consumerAvgs.sh`. All of the consumer scripts uses `--from-beginning`, so if you wish to data published only after the consumer is started, delete the parameter.
+
+**Keep in mind that all of the scripts are under the assumption that you installed Kafka locally in the same directory as my environment, and are running on Ubuntu/Debian. If different, make sure to change the script to adjust to your environment setup.**
+
 #### Launching the Web Interface
 ```
 |__ /flaskUI
