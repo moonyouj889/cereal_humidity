@@ -1,37 +1,13 @@
 const processIsOnTranslate = { '1': 'ON', '0': 'OFF' };
+const avgKeys = ['inputTemperatureProduct', 
+                  'waterFlowProcess',
+                  'intensityFanProcess',
+                  'waterTemperatureProcess',
+                  'temperatureProcess1',
+                  'temperatureProcess2'];
 
-function formatDt(timestampStr) {
-  dt = new Date(timestampStr);
-  return dt.toLocaleString('en-US', { timeZone: "America/New_York" })
-} 
 
-var currSource = new EventSource('/data/sensor');
-currSource.onmessage = function(event) {
-  currData = event.data.split(',');
-  $('#processIsOn').text(processIsOnTranslate[currData[1]]);
-  $('#inputTemperatureProduct').text(parseFloat(currData[2]).toFixed(2));
-  $('#waterFlowProcess').text(parseFloat(currData[3]).toFixed(2));
-  $('#intensityFanProcess').text(parseFloat(currData[4]).toFixed(2));
-  $('#waterTemperatureProcess').text(parseFloat(currData[5]).toFixed(2));
-  $('#temperatureProcess1').text(parseFloat(currData[6]).toFixed(2));
-  $('#temperatureProcess2').text(parseFloat(currData[7]).toFixed(2));
-
-  formattedDt = formatDt(new Date());
-  $('#currTimestamp').text(formattedDt);
-  // console.log(currData, formattedDt);
-};
-
-const avgKeys =
-  ['inputTemperatureProduct', 
-  'waterFlowProcess',
-  'intensityFanProcess',
-  'waterTemperatureProcess',
-  'temperatureProcess1',
-  'temperatureProcess2'];
-
-var avgSource = new EventSource('/data/averages');
-avgSource.onmessage = function(event) {
-  avgData = event.data.split(',');
+function writeAvgToWeb(avgData) {
   avgKey = avgData[0];
   avgVal = parseFloat(avgData[1]).toFixed(2);
   console.log(avgKey, "||", avgVal);
@@ -56,6 +32,53 @@ avgSource.onmessage = function(event) {
     $('#avgTimestamp').text(formattedDt);
     console.log("new timestamp", formattedDt);
   }
+}
+
+function writeCurrToWeb(currData) {
+  $('#processIsOn').text(processIsOnTranslate[currData[1]]);
+  $('#inputTemperatureProduct').text(parseFloat(currData[2]).toFixed(2));
+  $('#waterFlowProcess').text(parseFloat(currData[3]).toFixed(2));
+  $('#intensityFanProcess').text(parseFloat(currData[4]).toFixed(2));
+  $('#waterTemperatureProcess').text(parseFloat(currData[5]).toFixed(2));
+  $('#temperatureProcess1').text(parseFloat(currData[6]).toFixed(2));
+  $('#temperatureProcess2').text(parseFloat(currData[7]).toFixed(2));
+
+  formattedDt = formatDt(new Date());
+  $('#currTimestamp').text(formattedDt);
+}
+
+// Render data from session in case of refresh
+for (let key of avgKeys) {
+  avgData = localStorage.getItem(key).split(",");
+  if (avgData) {
+    writeAvgToWeb(avgData);
+  }
+}
+
+currData = localStorage.getItem("curr")
+if (currData) {
+  writeCurrToWeb(currData);
+}
+
+
+function formatDt(timestampStr) {
+  dt = new Date(timestampStr);
+  return dt.toLocaleString('en-US', { timeZone: "America/New_York" })
+} 
+
+var currSource = new EventSource('/data/sensor');
+currSource.onmessage = function(event) {
+  currData = event.data.split(',');
+  localStorage.setItem("curr", currData)
+  writeCurrToWeb(currData);
+};
+
+var avgSource = new EventSource('/data/averages');
+avgSource.onmessage = function(event) {
+  avgData = event.data.split(',');
+  localStorage.setItem(avgData[0], avgData);
+  writeAvgToWeb(avgData);
+
 };
 
 Highcharts.createElement('link', {
@@ -294,8 +317,8 @@ function extractValues(items) {
     var xVal = new Date(year, monthIndex, day, hours, minutes).getTime();
 
     for (var i=0; i < HBASE_COLUMNS.length; i++) {
-      console.log(HBASE_CF + ":" + HBASE_COLUMNS[i])
-      console.log(values[HBASE_CF + ":" + HBASE_COLUMNS[i]], values)
+      // console.log(HBASE_CF + ":" + HBASE_COLUMNS[i])
+      // console.log(values[HBASE_CF + ":" + HBASE_COLUMNS[i]], values)
       yVal = values[HBASE_CF + ":" + HBASE_COLUMNS[i]]
       xyPlots[COLUMNS[i]].push([xVal, yVal])
     }
@@ -309,8 +332,8 @@ function extractValues(items) {
 
 function disp_avg_chart(data) {
   xyPlots = extractValues(data.items)
-  console.log(data.items)
-  console.log("PLOTPOINTS: ", xyPlots) 
+  // console.log(data.items)
+  // console.log("PLOTPOINTS: ", xyPlots) 
 
   Highcharts.chart('temperatures', {
 

@@ -1,4 +1,6 @@
 const YESTERDAY = '20140602'
+// for real life scenario:
+// const YESTERDAY = new Date ... with YYYYMMDD format
 
 Highcharts.createElement('link', {
     href: 'https://fonts.googleapis.com/css?family=Unica+One',
