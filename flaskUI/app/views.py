@@ -43,7 +43,10 @@ def get_kafka_client():
 
 
 def events(topic):
-    for msg in KafkaConsumer(topic):
+    consumer = KafkaConsumer(topic, enable_auto_commit=False, auto_offset_reset='latest', group_id=None)
+    consumer.poll()
+    # consumer.seek_to_end()
+    for msg in consumer:
         yield 'data: {}\n\n'.format(msg.value.decode('utf-8'))
 
 
