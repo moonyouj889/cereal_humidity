@@ -118,7 +118,7 @@ mvn clean package exec:java -Dexec.mainClass=jj.flinkbeam.MainPipeline \
 mvn clean package exec:java -Dexec.mainClass=jj.flinkbeam.MainPipeline \
     -Pflink-runner \
     -Dexec.args="--runner=FlinkRunner \
-      --output=/tmp/SHOULDDELETE \
+      --output=/tmp/kafkaAvro- \
       --flinkMaster=localhost \
       --filesToStage=target/jj-flinkbeam-bundled-1.0-SNAPSHOT.jar" \
     -Djava.util.logging.config.file=src/main/resources/logging.properties

@@ -4,6 +4,7 @@ KAFKA_HOME=/usr/local/kafka
 # before running, purge the topic from previous run
 $KAFKA_HOME/bin/kafka-topics.sh --zookeeper $ZOOKEPER_HOST:2181 --delete --topic sensor
 $KAFKA_HOME/bin/kafka-topics.sh --zookeeper $ZOOKEPER_HOST:2181 --delete --topic lab
+$KAFKA_HOME/bin/kafka-topics.sh --zookeeper $ZOOKEPER_HOST:2181 --delete --topic averages
 
 # running for testing
 # speedFactor = 240 = 60 * 4 => one minute in real time is 0.25 sec

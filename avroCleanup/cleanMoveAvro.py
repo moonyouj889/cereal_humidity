@@ -1,13 +1,21 @@
 import os 
+import argparse
 
-AVROFILE_DIR = "/home/julie/avroFiles/"
 
-def main(): 
-	for filename in os.listdir(AVROFILE_DIR): 
-		dst = filename.replace(":", "_")
-		src = AVROFILE_DIR + filename 
-		dst = AVROFILE_DIR + dst 
-		os.rename(src, dst) 
+def main(avroDir):
+    for filename in os.listdir(avroDir): 
+        dst = filename.replace(":", "_")
+        src = avroDir + filename 
+        dst = avroDir + dst 
+        os.rename(src, dst) 
+
 
 if __name__ == '__main__': 
-	main() 
+    parser = argparse.ArgumentParser(
+        description='Bulk clean Avro filenames for HDFS compatibility')
+    parser.add_argument(
+        '--avroDir', required=True, type=int,
+        help=('full directory of Avro files produced by Beam'))
+    args = parser.parse_args()
+	main(args.avroDir) 
+    
