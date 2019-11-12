@@ -395,43 +395,11 @@ public class MainPipeline {
         .apply("TimeWindow", Window.into(FixedWindows.of(Duration.standardSeconds(FIXED_WINDOW_SIZE))));
 
     // Batch load to HBase
-    // for (int i = 0; i < COLUMNS.size(); i++) {
-    //   sensorData.apply("ToHBaseMutation", MapElements.via(new MakeBatchMutation(true, i)))//
-    //       .apply("WriteCurrentConditionsToHBase", HBaseIO.write() //
-    //           .withConfiguration(conf).withTableId(options.getLoadTableName()));
-    // }
-
-    // Define TupleTags per column of sensor data
-    final TupleTag<String> col0 = new TupleTag<String>(){};
-    final TupleTag<String> col1 = new TupleTag<String>(){};
-    final TupleTag<String> col2 = new TupleTag<String>(){};
-    final TupleTag<String> col3 = new TupleTag<String>(){};
-    final TupleTag<String> col4 = new TupleTag<String>(){};
-    final TupleTag<String> col5 = new TupleTag<String>(){};
-    final TupleTag<String> col6 = new TupleTag<String>(){};
-    TupleTag<String>[] colTags = [col0, col1, col2, col3, col4, col5, col6];
-
-    PCollectionTuple hbasePuts = sensorData.apply(ParDo.of(
-      new DoFn<String, String>() {
-        @ProcessElement
-        public void processElement(ProcessContext c) {
-          if (c.element().startsWith("A")) {
-            // Emit to main output, which is the output with tag startsWithATag.
-            c.output(c.element());
-          } else if(c.element().startsWith("B")) {
-            // Emit to output with tag startsWithBTag.
-            c.output(startsWithBTag, c.element());
-          }
-        }
-      })
-      // Specify main output. In this example, it is the output
-      // with tag startsWithATag.
-      .withOutputTags(col0,
-                      TupleTagList.of(startsWithBTag).and()));
-
-    sensorData.apply("ToHBaseMutation", MapElements.via(new MakeBatchMutation(true, i)))//
-        .apply("WriteCurrentConditionsToHBase", HBaseIO.write() //
-            .withConfiguration(conf).withTableId(options.getLoadTableName()));
+    for (int i = 0; i < COLUMNS.size(); i++) {
+      sensorData.apply("ToHBaseMutation", MapElements.via(new MakeBatchMutation(true, i)))//
+          .apply("WriteCurrentConditionsToHBase", HBaseIO.write() //
+              .withConfiguration(conf).withTableId(options.getLoadTableName()));
+    }
 
     labData.apply("ToHBaseMutation", MapElements.via(new MakeBatchMutation(false, 0)))//
         .apply("WriteCurrentConditionsToHBase", HBaseIO.write() //
