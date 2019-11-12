@@ -420,7 +420,9 @@ In a case of one file, you can simply rename the file manually to get rid of the
     |-- sparkSubmitMultipleBatchAnalysis.sh
 ```
 
-`CerealHumidity.py` is a Spark application for processing a single Avro file to calculate the aggregates per humidity measurement. You can run the Spark application on Yarn by running `sparkSubmitCerealHumidity.sh` script. However, as you can see from the script, it requires a jar file for shc (additional package to interact with HBase). SHC has an issue with Spark 2.4, throwing an error with json4s, so the package must be built locally (this issue can be found [here](https://github.com/hortonworks-spark/shc/issues/294)). There is also an issue with `java.lang.NoClassDefFoundError:` for HBase classes, so the HBase jars were manually included in the command (the issue's solution can be found [here](https://github.com/hortonworks-spark/shc/issues/223#issuecomment-375111619)).
+`CerealHumidity.py` is a Spark application for processing a single Avro file to calculate the aggregates per humidity measurement. You can run the Spark application on Yarn by running `sparkSubmitCerealHumidity.sh` script. Keep in mind that the shell script does not provide the proper `--fileDir` and `avroFile` arguments. Make sure to change it to match your HDFS location and name of the Avro file you are trying to process. 
+
+As you can see from the script, it requires a jar file for shc (additional package to interact with HBase). SHC has an issue with Spark 2.4, throwing an error with json4s, so the package must be built locally (this issue can be found [here](https://github.com/hortonworks-spark/shc/issues/294)). There is also an issue with `java.lang.NoClassDefFoundError:` for HBase classes, so the HBase jars were manually included in the command (the issue's solution can be found [here](https://github.com/hortonworks-spark/shc/issues/223#issuecomment-375111619)).
 
 `MultipleBatchAnalysis.py` is a Spark application written for running multiple Avro batch analyses, exclusively used for testing. `sparkSubmitMultipleBatchAnalysis.sh` is the shell script that runs this Spark application.
 

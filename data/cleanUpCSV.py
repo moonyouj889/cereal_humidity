@@ -21,7 +21,7 @@ import logging
 import json
 
 
-DATA_FOLDER = './data/processed_data/'
+DATA_FOLDER = './processed_data/'
 INPUT = 'food-beverage-drying-process.csv'
 OUTPUT = DATA_FOLDER + 'chrono-comma-sep-' + INPUT
 FIELD_CLEANED_OUTPUT = DATA_FOLDER + 'data-to-pubsub-' + INPUT
@@ -101,15 +101,17 @@ if __name__ == '__main__':
     logging.basicConfig(
         format='%(message)s', level=logging.INFO)
 
-    try:
+    if os.path.exists(DATA_FOLDER):
         shutil.rmtree(DATA_FOLDER)
         logging.info("INFO: Old processed csv found and removed.")
         os.mkdir(DATA_FOLDER)
         logging.info(
             "INFO: processed_data directory recreated.")
-    except OSError as e:
-        if e.errno != errno.ENOENT:
-            raise
+    else:
+        os.mkdir(DATA_FOLDER)
+    # except OSError as e:
+    #     if e.errno != errno.ENOENT:
+    #         raise
 
     logging.info("Continuing csv processing...")
     logging.info("\n_______FIELD NAMES_______")
@@ -127,7 +129,7 @@ if __name__ == '__main__':
     ''')
 
     # sort the order of ther rows by timestamps
-    with open('./data/' + INPUT, 'r') as jumbled_data,  \
+    with open(INPUT, 'r') as jumbled_data,  \
             open(COMMA_SEP_FILE, 'w') as csv_data:
         jumbled_rows = csv.reader(jumbled_data, delimiter=';')
         jumbled_rows_header = next(jumbled_rows)
