@@ -432,9 +432,6 @@ As you can see from the script, it requires a jar file for shc (additional packa
 
 - Split the Beam pipeline to separate stream and batch jobs.
   - In this project, the stream and batch pipelines are independent, but were combined into one job for the ease of testing. It is not good practice to merge all jobs into one in practice if the two pipelines are independent of each other. If one part of the job fails, it will halt the entire job until the problem is fixed, or could be restarted.
-- Eliminate repeated filtering of sensor data for inserting them into the `"currentConditions"` table in HBase.
-  - Instead of looping through the columns to perform the PTransform `"ToHBaseMutation"`, followed by `"WriteCurrentConditionsToHBase"`, of the sensor data to form multiple `Put()` objects, produce a chain of `.addColumn()` to a single `Put()`. Currently, the code reads through the same PCollection multiple times to filter out the values of each column.
-  - The PCollection fed into `"ToHBaseMutation"` is in a form of `KV<String, String>`, with datetime as key and sensor values delimited by "," as value, so it should be a quick fix to loop through the values within the PTransform to create the `Put()` with multiple `.addColumn()`.
 - Get rid of Avro and read from HBase.
   - Currently, it is obvious that the work done to produce both Avro and HBase rows is repetitive and inefficient. This was a quick workaround to the fact that reading from HBase to Spark DataFrame using PySpark did not have a feature to scan for specific rows of the HBase table before producing the DataFrame. The examples provided only seemed to talk about reading the entire table to DataFrame.
   - For a specific use case of retrieving HBase data from start prefix row to end prefix row is a common problem solved using Java. A quick code example to solve the problem:
